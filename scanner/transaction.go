@@ -13,12 +13,13 @@ import (
 
 // Transaction represents a parsed TRON transaction
 type Transaction struct {
-	ID         string    `json:"id"`
-	Contract   Contract  `json:"contract"`
-	Ret        RetInfo   `json:"ret"`
-	Timestamp  time.Time `json:"timestamp"`
-	EnergyUsed int64     `json:"energy_used,omitempty"`
-	Logs       []LogInfo `json:"logs,omitempty"`
+	ID            string    `json:"id"`
+	Contract      Contract  `json:"contract"`
+	Ret           RetInfo   `json:"ret"`
+	Timestamp     time.Time `json:"timestamp"`
+	EnergyUsed    int64     `json:"energy_used,omitempty"`
+	BandwidthUsed int64     `json:"bandwidth_used,omitempty"`
+	Logs          []LogInfo `json:"logs,omitempty"`
 }
 
 // RetInfo represents the return information of a transaction
@@ -287,6 +288,61 @@ func ParseTransaction(tx *api.TransactionExtention) Transaction {
 			// if contract.PermissionId != 0 {
 			// 	transaction.Contract.PermissionID = int(contract.PermissionId)
 			// }
+		}
+	}
+
+	return transaction
+}
+
+// ParseTransactionWithInfo enhances a structured transaction with additional info from TransactionInfo
+func ParseTransactionWithInfo(tx *api.TransactionExtention, txInfo *core.TransactionInfo) Transaction {
+	// First parse the basic transaction
+	transaction := ParseTransaction(tx)
+
+	// Enhance with additional info from TransactionInfo
+	if txInfo != nil {
+		// Add energy usage info
+		if txInfo.Receipt != nil {
+			if txInfo.Receipt.EnergyUsage > 0 {
+				transaction.EnergyUsed = txInfo.Receipt.EnergyUsage
+			}
+			// We could also add other energy-related fields if needed:
+			// EnergyUsageTotal, OriginEnergyUsage, EnergyPenaltyTotal
+		}
+
+		// Add logs from TransactionInfo (these are typically more complete)
+		if len(txInfo.Log) > 0 {
+			transaction.Logs = make([]LogInfo, 0, len(txInfo.Log))
+			for _, log := range txInfo.Log {
+				// Decode the log using eventdecoder
+				decodedEvent, err := eventdecoder.DecodeLog(log.Topics, log.Data)
+				if err == nil {
+					logInfo := LogInfo{
+						EventName: decodedEvent.EventName,
+						Address:   byteAddrToString(log.Address),
+					}
+
+					// Convert decoded event parameters
+					if len(decodedEvent.Parameters) > 0 {
+						logInfo.Inputs = make([]EventInput, len(decodedEvent.Parameters))
+						for i, param := range decodedEvent.Parameters {
+							logInfo.Inputs[i] = EventInput{
+								Name:  param.Name,
+								Type:  param.Type,
+								Value: param.Value,
+							}
+						}
+					}
+
+					transaction.Logs = append(transaction.Logs, logInfo)
+				} else {
+					// If we can't decode the log, still include basic info
+					logInfo := LogInfo{
+						Address: byteAddrToString(log.Address),
+					}
+					transaction.Logs = append(transaction.Logs, logInfo)
+				}
+			}
 		}
 	}
 

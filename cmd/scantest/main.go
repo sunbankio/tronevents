@@ -15,9 +15,18 @@ func main() {
 	// Check command line arguments
 	args := os.Args[1:]
 	structured := false
+	triggerDebug := false
+	txInfo := false
+
 	for _, arg := range args {
 		if arg == "--structured" || arg == "-s" {
 			structured = true
+		}
+		if arg == "--trigger-debug" || arg == "-t" {
+			triggerDebug = true
+		}
+		if arg == "--txinfo" || arg == "-i" {
+			txInfo = true
 		}
 	}
 
@@ -30,12 +39,18 @@ func main() {
 	}
 	defer scanner.Close()
 
-	if structured {
+	if txInfo {
+		fmt.Println("Using transaction info output:")
+		err = scanner.ScanTransactionInfo(blockNumber)
+	} else if triggerDebug {
+		fmt.Println("Using trigger smart contract debug output:")
+		err = scanner.ScanTriggerDebug(blockNumber)
+	} else if structured {
 		fmt.Println("Using structured output:")
 		err = scanner.ScanStructured(blockNumber)
 	} else {
 		fmt.Println("Using raw output:")
-		err = scanner.Scan(blockNumber)
+		_, err = scanner.Scan(blockNumber)
 	}
 
 	if err != nil {
