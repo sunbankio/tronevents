@@ -2,9 +2,7 @@ module github.com/sunbankio/tron--events
 
 go 1.25.0
 
-replace github.com/kslamph/tronlib => ../tronlib
-
-require github.com/kslamph/tronlib v1.0.8
+require github.com/kslamph/tronlib v0.0.0-20250925075514-d2b7009a95d9
 
 require (
 	github.com/btcsuite/btcd/btcec/v2 v2.3.5 // indirect

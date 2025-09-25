@@ -72,6 +72,8 @@ github.com/jrick/logrotate v1.0.0/go.mod h1:LNinyqDIJnpAur+b8yyulnQw/wDuN1+BYKlT
 github.com/kkdai/bstream v0.0.0-20161212061736-f391b8402d23/go.mod h1:J+Gs4SYgM6CZQHDETBtE9HaSEkGmuNXF86RwHhHUvq4=
 github.com/kslamph/bip39-hdwallet v1.0.1 h1:GmYvJaoQy/ubSnpR8NZBEwQfOFvspjvpbsFe/KoypNs=
 github.com/kslamph/bip39-hdwallet v1.0.1/go.mod h1:5wnt7iWZ3LDanTqUfwwVf5l2UoTvkprGqjsfzgz8RV4=
+github.com/kslamph/tronlib v0.0.0-20250925075514-d2b7009a95d9 h1:KcyUDAufskppNmtMjgBHA7y+wEVKQEjFhf+hyuGfSUo=
+github.com/kslamph/tronlib v0.0.0-20250925075514-d2b7009a95d9/go.mod h1:iTU8IGfE8GobBL3b35WkfOhZ1hYc+yQVQc122W7DVRw=
 github.com/mr-tron/base58 v1.2.0 h1:T/HDJBh4ZCPbU39/+c3rRvE0uKBQlU27+QI8LJ4t64o=
 github.com/mr-tron/base58 v1.2.0/go.mod h1:BinMc/sQntlIE1frQmRFPUoPA1Zkr8VRgBdjWI2mNwc=
 github.com/nxadm/tail v1.4.4/go.mod h1:kenIhsEOeOJmVchQTgglprH7qJGnHDVpk1VPCcaMI8A=
