@@ -92,6 +92,14 @@ func PrintTransaction(tx Transaction) {
 		}
 	}
 
+	// Display signers if available
+	if len(tx.Signers) > 0 {
+		fmt.Printf("Signers (%d):\n", len(tx.Signers))
+		for i, signer := range tx.Signers {
+			fmt.Printf("  Signer %d: %s\n", i+1, signer)
+		}
+	}
+
 	fmt.Printf("Result: %s\n", tx.Ret.ContractRet)
 	fmt.Println()
 }

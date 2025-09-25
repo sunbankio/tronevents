@@ -1,12 +1,16 @@
 package scanner
 
 import (
+	"crypto/sha256"
 	"encoding/hex"
 	"time"
 
+	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/kslamph/tronlib/pb/api"
 	"github.com/kslamph/tronlib/pb/core"
 	"github.com/kslamph/tronlib/pkg/eventdecoder"
+	"github.com/kslamph/tronlib/pkg/types"
+	"google.golang.org/protobuf/proto"
 )
 
 // Transaction represents a parsed TRON transaction
@@ -21,6 +25,7 @@ type Transaction struct {
 	EnergyUsed     int64     `json:"energy_used,omitempty"`
 	BandwidthUsed  int64     `json:"bandwidth_used,omitempty"`
 	Logs           []LogInfo `json:"logs,omitempty"`
+	Signers        []string  `json:"signers,omitempty"` // All signers for the transaction
 }
 
 // RetInfo represents the return information of a transaction
@@ -291,6 +296,12 @@ func parseTransaction(tx *api.TransactionExtention) Transaction {
 		}
 	}
 
+	// Extract signers from transaction signatures
+	signers, err := recoverSignersFromTransaction(tx)
+	if err == nil && len(signers) > 0 {
+		transaction.Signers = signers
+	}
+
 	return transaction
 }
 
@@ -356,5 +367,58 @@ func parseTransactionWithInfo(tx *api.TransactionExtention, txInfo *core.Transac
 		}
 	}
 
+	// Extract signers from transaction signatures
+	signers, err := recoverSignersFromTransaction(tx)
+	if err == nil && len(signers) > 0 {
+		transaction.Signers = signers
+	}
+
 	return transaction
+}
+
+// recoverSignersFromTransaction recovers all signer addresses from transaction signatures
+func recoverSignersFromTransaction(tx *api.TransactionExtention) ([]string, error) {
+	if tx.Transaction == nil {
+		return nil, nil
+	}
+
+	// Get the raw transaction data that was signed
+	rawData, err := proto.Marshal(tx.Transaction.GetRawData())
+	if err != nil {
+		return nil, err
+	}
+
+	// Calculate the hash that was signed (SHA256 of raw data)
+	h256h := sha256.New()
+	h256h.Write(rawData)
+	hash := h256h.Sum(nil)
+
+	// Get signatures from the transaction
+	signatures := tx.Transaction.GetSignature()
+	if len(signatures) == 0 {
+		return nil, nil
+	}
+
+	signers := make([]string, 0, len(signatures))
+	for _, sig := range signatures {
+		if len(sig) < 64 {
+			continue
+		}
+
+		// TRON signatures should be properly formatted for recovery
+		// Recover the public key from the signature and hash
+		pubKey, err := crypto.SigToPub(hash, sig)
+		if err != nil {
+			continue // Skip invalid signatures
+		}
+
+		// Convert public key to TRON address
+		ethAddress := crypto.PubkeyToAddress(*pubKey)
+
+		// Convert Ethereum address to TRON address format
+		tronAddr := types.MustNewAddressFromHex(ethAddress.Hex())
+		signers = append(signers, tronAddr.String())
+	}
+
+	return signers, nil
 }
