@@ -3,6 +3,8 @@ package main
 import (
 	"fmt"
 	"log"
+	"reflect"
+	"strings"
 
 	"github.com/sunbankio/tron--events/scanner"
 )
@@ -53,41 +55,8 @@ func printTransaction(tx scanner.Transaction) {
 		fmt.Printf("Contract Permission ID: %d\n", tx.Contract.PermissionID)
 	}
 
-	switch param := tx.Contract.Parameter.(type) {
-	case scanner.TransferContract:
-		fmt.Printf("From: %s\n", param.OwnerAddress)
-		fmt.Printf("To: %s\n", param.ToAddress)
-		fmt.Printf("Amount: %d\n", param.Amount)
-	case scanner.DelegateResourceContract:
-		fmt.Printf("From: %s\n", param.OwnerAddress)
-		fmt.Printf("To: %s\n", param.ReceiverAddress)
-		fmt.Printf("Resource: %s\n", param.Resource)
-		fmt.Printf("Balance: %d\n", param.Balance)
-	case scanner.UnDelegateResourceContract:
-		fmt.Printf("From: %s\n", param.OwnerAddress)
-		fmt.Printf("To: %s\n", param.ReceiverAddress)
-		fmt.Printf("Resource: %s\n", param.Resource)
-		fmt.Printf("Balance: %d\n", param.Balance)
-	case scanner.TriggerSmartContract:
-		fmt.Printf("Owner: %s\n", param.OwnerAddress)
-		fmt.Printf("Contract: %s\n", param.ContractAddress)
-		fmt.Printf("Data: %s\n", param.Data)
-		if param.CallValue != 0 {
-			fmt.Printf("Call Value: %d\n", param.CallValue)
-		}
-		if param.FeeLimit != 0 {
-			fmt.Printf("Fee Limit: %d\n", param.FeeLimit)
-		}
-	case scanner.FreezeBalanceV2Contract:
-		fmt.Printf("Owner: %s\n", param.OwnerAddress)
-		fmt.Printf("Resource: %s\n", param.Resource)
-		fmt.Printf("Frozen Balance: %d\n", param.FrozenBalance)
-	case scanner.TransferAssetContract:
-		fmt.Printf("Asset Name: %s\n", param.AssetName)
-		fmt.Printf("From: %s\n", param.OwnerAddress)
-		fmt.Printf("To: %s\n", param.ToAddress)
-		fmt.Printf("Amount: %d\n", param.Amount)
-	}
+	// Print contract parameters dynamically using reflection
+	printContractParameters(tx.Contract.Parameter)
 
 	// Display energy used if available
 	if tx.EnergyUsed > 0 {
@@ -130,4 +99,92 @@ func printTransaction(tx scanner.Transaction) {
 
 	fmt.Printf("Result: %s\n", tx.Ret.ContractRet)
 	fmt.Println()
+}
+
+// printContractParameters prints contract parameters dynamically using reflection
+func printContractParameters(param interface{}) {
+	if param == nil {
+		return
+	}
+
+	v := reflect.ValueOf(param)
+	if v.Kind() == reflect.Ptr {
+		v = v.Elem()
+	}
+
+	if !v.IsValid() {
+		return
+	}
+
+	t := v.Type()
+
+	for i := 0; i < v.NumField(); i++ {
+		field := v.Field(i)
+		fieldType := t.Field(i)
+		
+		// Get the field name from struct tag if available, otherwise use field name
+		name := fieldType.Name
+		if jsonTag := fieldType.Tag.Get("json"); jsonTag != "" {
+			if commaIdx := strings.Index(jsonTag, ","); commaIdx != -1 {
+				name = jsonTag[:commaIdx]
+			} else {
+				name = jsonTag
+			}
+		}
+		
+		// Skip fields that are meant to be omitted
+		if name == "-" {
+			continue
+		}
+		
+		// Format the field name nicely (convert from CamelCase to readable format)
+		formattedName := formatFieldName(name)
+		
+		// Print the field value based on its type
+		switch field.Kind() {
+		case reflect.String:
+			if field.String() != "" {
+				fmt.Printf("%s: %s\n", formattedName, field.String())
+			}
+		case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+			if field.Int() != 0 {
+				fmt.Printf("%s: %d\n", formattedName, field.Int())
+			}
+		case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+			if field.Uint() != 0 {
+				fmt.Printf("%s: %d\n", formattedName, field.Uint())
+			}
+		case reflect.Bool:
+			fmt.Printf("%s: %t\n", formattedName, field.Bool())
+		case reflect.Slice:
+			if field.Len() > 0 {
+				fmt.Printf("%s: %v\n", formattedName, field.Interface())
+			}
+		case reflect.Array:
+			if field.Len() > 0 {
+				fmt.Printf("%s: %v\n", formattedName, field.Interface())
+			}
+		default:
+			if field.Interface() != nil {
+				fmt.Printf("%s: %v\n", formattedName, field.Interface())
+			}
+		}
+	}
+}
+
+// formatFieldName converts a field name from CamelCase to a more readable format
+func formatFieldName(name string) string {
+	if name == "" {
+		return name
+	}
+
+	// Simple conversion from CamelCase to readable format
+	result := ""
+	for i, r := range name {
+		if i > 0 && r >= 'A' && r <= 'Z' {
+			result += " "
+		}
+		result += string(r)
+	}
+	return result
 }
