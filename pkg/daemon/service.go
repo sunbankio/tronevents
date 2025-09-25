@@ -139,6 +139,7 @@ func (s *Service) runLoop(ctx context.Context) {
 			time.Sleep(1 * time.Second)
 			continue
 		}
+		s.logger.Println("=========MAINLOOP ITERATION START=========")
 		s.logger.Printf("DEBUG: Loaded last_synced_block = %d", lastSyncedBlock)
 
 		// Use scanner.Scan(0) to get current block
@@ -185,13 +186,6 @@ func (s *Service) runLoop(ctx context.Context) {
 		// blocks from last_synced+1 to returned_block-1 (inclusive) are missing
 		if returnedBlockNum <= lastSyncedBlock+20 {
 			s.logger.Printf("DEBUG: Slight backlog detected - lastSynced: %d, returned: %d, gap: %d blocks", lastSyncedBlock, returnedBlockNum, returnedBlockNum-lastSyncedBlock-1)
-
-			// Push the gapped blocks' block numbers into a priority queue
-			blocksToQueue := []int64{}
-			for blockNum := lastSyncedBlock + 1; blockNum < returnedBlockNum; blockNum++ {
-				blocksToQueue = append(blocksToQueue, blockNum)
-			}
-			s.logger.Printf("DEBUG: Putting blocks %v into priority queue", blocksToQueue)
 
 			for blockNum := lastSyncedBlock + 1; blockNum < returnedBlockNum; blockNum++ {
 				payload, err := json.Marshal(map[string]interface{}{"block_number": blockNum})
