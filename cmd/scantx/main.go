@@ -6,7 +6,7 @@ import (
 	"reflect"
 	"strings"
 
-	"github.com/sunbankio/tron--events/scanner"
+	"github.com/sunbankio/tronevents/pkg/scanner"
 )
 
 func main() {
