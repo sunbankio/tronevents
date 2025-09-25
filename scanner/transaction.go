@@ -114,46 +114,6 @@ func parseTransaction(tx *api.TransactionExtention) Transaction {
 		}
 	}
 
-	// Parse energy used
-	if tx.EnergyUsed > 0 {
-		transaction.EnergyUsed = tx.EnergyUsed
-	}
-
-	// Parse logs
-	if len(tx.Logs) > 0 {
-		transaction.Logs = make([]LogInfo, 0, len(tx.Logs))
-		for _, log := range tx.Logs {
-			// Decode the log using eventdecoder
-			decodedEvent, err := eventdecoder.DecodeLog(log.Topics, log.Data)
-			if err == nil {
-				logInfo := LogInfo{
-					EventName: decodedEvent.EventName,
-					Address:   byteAddrToString(log.Address),
-				}
-
-				// Convert decoded event parameters
-				if len(decodedEvent.Parameters) > 0 {
-					logInfo.Inputs = make([]EventInput, len(decodedEvent.Parameters))
-					for i, param := range decodedEvent.Parameters {
-						logInfo.Inputs[i] = EventInput{
-							Name:  param.Name,
-							Type:  param.Type,
-							Value: param.Value,
-						}
-					}
-				}
-
-				transaction.Logs = append(transaction.Logs, logInfo)
-			} else {
-				// If we can't decode the log, still include basic info
-				logInfo := LogInfo{
-					Address: byteAddrToString(log.Address),
-				}
-				transaction.Logs = append(transaction.Logs, logInfo)
-			}
-		}
-	}
-
 	// Parse timestamp
 	if tx.Transaction != nil && tx.Transaction.RawData != nil {
 		transaction.Timestamp = time.Unix(tx.Transaction.RawData.Timestamp/1000, 0)
@@ -362,12 +322,6 @@ func parseTransactionWithInfo(tx *api.TransactionExtention, txInfo *core.Transac
 				}
 			}
 		}
-	}
-
-	// Extract signers from transaction signatures
-	signers, err := recoverSignersFromTransaction(tx)
-	if err == nil && len(signers) > 0 {
-		transaction.Signers = signers
 	}
 
 	return transaction
