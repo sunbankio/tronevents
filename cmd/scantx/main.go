@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"reflect"
@@ -23,7 +24,7 @@ func main() {
 	defer scn.Close()
 
 	// Use the implemented Scan function to get transactions
-	blockNumber, blockTime, transactions, err := scn.Scan(blockNumber)
+	blockNumber, blockTime, transactions, err := scn.Scan(context.Background(), blockNumber)
 	if err != nil {
 		log.Fatalf("Failed to scan block %d: %v", blockNumber, err)
 	}

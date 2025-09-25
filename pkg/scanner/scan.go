@@ -18,7 +18,6 @@ const (
 
 type Scanner struct {
 	tronclient *client.Client
-	ctx        context.Context
 }
 
 // Default values
@@ -35,7 +34,6 @@ func NewScanner(nodeAddress string) (*Scanner, error) {
 
 	return &Scanner{
 		tronclient: tronclient,
-		ctx:        context.Background(),
 	}, nil
 }
 
@@ -43,19 +41,19 @@ func (s *Scanner) Close() {
 	s.tronclient.Close()
 }
 
-func (s *Scanner) Scan(blockNumber int64) (int64, time.Time, []Transaction, error) {
+func (s *Scanner) Scan(ctx context.Context, blockNumber int64) (int64, time.Time, []Transaction, error) {
 	var block *api.BlockExtention
 
 	if blockNumber > 0 {
 		var err error
-		block, err = s.getBlockByNumber(blockNumber)
+		block, err = s.getBlockByNumber(ctx, blockNumber)
 		if err != nil {
 			return 0, time.Time{}, nil, err
 		}
 	} else {
 		var err error
 		// Get the latest block
-		block, err = s.tronclient.Network().GetNowBlock(s.ctx)
+		block, err = s.tronclient.Network().GetNowBlock(ctx)
 		if err != nil {
 			return 0, time.Time{}, nil, err
 		}
@@ -64,7 +62,7 @@ func (s *Scanner) Scan(blockNumber int64) (int64, time.Time, []Transaction, erro
 	blockTime := time.Unix(0, block.BlockHeader.RawData.Timestamp*int64(time.Millisecond))
 
 	// Get transaction info - assuming it always exists for block transactions
-	txInfoList, err := s.getTransactionInfoByNumber(blockNumber)
+	txInfoList, err := s.getTransactionInfoByNumber(ctx, blockNumber)
 	if err != nil {
 		return 0, time.Time{}, nil, err
 	}
@@ -96,12 +94,12 @@ func (s *Scanner) Scan(blockNumber int64) (int64, time.Time, []Transaction, erro
 	return blockNumber, blockTime, transactions, nil
 }
 
-func (s *Scanner) getBlockByNumber(blockNumber int64) (*api.BlockExtention, error) {
-	return s.tronclient.Network().GetBlockByNumber(s.ctx, blockNumber)
+func (s *Scanner) getBlockByNumber(ctx context.Context, blockNumber int64) (*api.BlockExtention, error) {
+	return s.tronclient.Network().GetBlockByNumber(ctx, blockNumber)
 }
 
-func (s *Scanner) getTransactionInfoByNumber(blockNumber int64) (*api.TransactionInfoList, error) {
-	return s.tronclient.Network().GetTransactionInfoByBlockNum(s.ctx, blockNumber)
+func (s *Scanner) getTransactionInfoByNumber(ctx context.Context, blockNumber int64) (*api.TransactionInfoList, error) {
+	return s.tronclient.Network().GetTransactionInfoByBlockNum(ctx, blockNumber)
 }
 
 // IScanner defines the interface for the block scanner.
@@ -112,12 +110,12 @@ type IScanner interface {
 
 // GetCurrentBlockNumber returns the latest block number
 func (s *Scanner) GetCurrentBlockNumber() (int64, error) {
-	blockNum, _, _, err := s.Scan(0)
+	blockNum, _, _, err := s.Scan(context.Background(), 0)
 	return blockNum, err
 }
 
 // GetTransactionsByBlock returns transactions for a given block number
 func (s *Scanner) GetTransactionsByBlock(blockNum int64) ([]Transaction, error) {
-	_, _, transactions, err := s.Scan(blockNum)
+	_, _, transactions, err := s.Scan(context.Background(), blockNum)
 	return transactions, err
 }

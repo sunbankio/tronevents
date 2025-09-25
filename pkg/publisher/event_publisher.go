@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/go-redis/redis/v8"
+	"github.com/sunbankio/tronevents/pkg/models"
 	"github.com/sunbankio/tronevents/pkg/scanner"
 )
 
@@ -32,7 +33,9 @@ func NewEventPublisher(client *redis.Client) *EventPublisher {
 func (p *EventPublisher) Publish(ctx context.Context, tx *scanner.Transaction) error {
 	<-p.limiter
 
-	payload, err := json.Marshal(tx)
+	// Convert to safe transaction to handle invalid times
+	safeTx := models.ConvertTransaction(*tx)
+	payload, err := json.Marshal(safeTx)
 	if err != nil {
 		return err
 	}

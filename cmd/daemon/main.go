@@ -1,7 +1,11 @@
 package main
 
 import (
+	"context"
 	"log"
+	"os"
+	"os/signal"
+	"syscall"
 
 	"github.com/sunbankio/tronevents/pkg/config"
 	"github.com/sunbankio/tronevents/pkg/daemon"
@@ -14,12 +18,24 @@ func main() {
 		log.Fatal("Failed to load config: ", err)
 	}
 
-	// Create and run the daemon service
+	// Create the daemon service
 	service := daemon.NewService(cfg)
 
-	// Handle shutdown
-	go daemon.Shutdown(service.WorkerManager(), service.Logger())
+	// Create a context that is cancelled on interrupt signal
+	ctx, cancel := context.WithCancel(context.Background())
 
-	// Start the daemon
-	service.Run()
+	// Handle shutdown
+	c := make(chan os.Signal, 1)
+	signal.Notify(c, os.Interrupt, syscall.SIGTERM)
+
+	// Goroutine to handle shutdown signal
+	go func() {
+		<-c
+		log.Println("Shutting down...")
+		cancel() // Cancel the context to signal shutdown
+		service.WorkerManager().Stop()
+	}()
+
+	// Start the daemon with context
+	service.RunWithContext(ctx)
 }

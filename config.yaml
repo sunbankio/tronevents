@@ -7,5 +7,5 @@ queue:
   new_block_workers: 1
   priority_workers: 1
   backlog_workers: 13
-tron_node_url: "localhost:50051"
+tron_node_url: "grpc://localhost:50051"
 log_level: "info"
