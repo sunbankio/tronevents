@@ -90,7 +90,7 @@ func main() {
 
 func checkQueuesForBlock(rdb *redis.Client, ctx context.Context, blockNumber int64) {
 	// Asynq uses specific queue names prefixed with asynq
-	queues := []string{"asynq:queue:priority", "asynq:queue:backlog", "asynq:queue:default"}
+	queues := []string{"asynq:queue:priority", "asynq:queue:backlog", "asynq:queue:default", "asynq:queue:retry", "asynq:queue:dead"}
 
 	for _, queue := range queues {
 		fmt.Printf("  Checking queue %s: ", queue)
@@ -105,12 +105,12 @@ func checkQueuesForBlock(rdb *redis.Client, ctx context.Context, blockNumber int
 		if queueLen > 0 {
 			fmt.Printf("Length: %d\n", queueLen)
 
-			// Get a sample of tasks to check if our block number is there
-			// We'll use LRANGE to get some tasks from the queue
-			// For Asynq, the tasks are stored as JSON with specific format
-			// We'll check first up to 10 tasks in the queue
-			endIdx := int64(9) // 0 to 9 = 10 items
-			if queueLen < 10 {
+			// For Asynq, we need to use LINDEX to check individual tasks or use LRange
+			// Asynq tasks have a specific binary format that contains JSON
+			// Let's try to find the block number in a more comprehensive way
+			// We'll check all tasks in the queue for the block number
+			endIdx := int64(49) // Check up to 50 tasks to find our block
+			if queueLen < 50 {
 				endIdx = queueLen - 1
 			}
 
@@ -122,10 +122,30 @@ func checkQueuesForBlock(rdb *redis.Client, ctx context.Context, blockNumber int
 
 			blockFound := false
 			for i, taskData := range tasks {
-				// Check if this task contains our block number
-				if strings.Contains(taskData, fmt.Sprintf("\"block_number\":%d", blockNumber)) {
-					fmt.Printf("    FOUND BLOCK %d in task %d of queue %s!\n", blockNumber, i, queue)
-					blockFound = true
+				// Check for the block number in various possible formats
+				// Asynq task format may have different internal structures
+				searchPatterns := []string{
+					fmt.Sprintf("\"block_number\":%d", blockNumber),      // exact JSON number
+					fmt.Sprintf("\"block_number\": %d", blockNumber),     // JSON with space
+					fmt.Sprintf("block_number:%d", blockNumber),          // without quotes
+					fmt.Sprintf("%d", blockNumber),                       // just the number
+				}
+
+				for _, pattern := range searchPatterns {
+					if strings.Contains(taskData, pattern) {
+						fmt.Printf("    FOUND BLOCK %d in task %d of queue %s!\n", blockNumber, i, queue)
+						blockFound = true
+						// Show a snippet of what was found for debugging
+						start := strings.Index(taskData, pattern)
+						end := start + len(pattern) + 20
+						if end > len(taskData) {
+							end = len(taskData)
+						}
+						fmt.Printf("      Found in context: ...%s\n", taskData[start:end])
+						break
+					}
+				}
+				if blockFound {
 					break
 				}
 			}
@@ -148,13 +168,28 @@ func checkQueuesForBlock(rdb *redis.Client, ctx context.Context, blockNumber int
 			scheduledLen, _ := rdb.ZCard(ctx, key).Result()
 			if scheduledLen > 0 {
 				fmt.Printf("    Scheduled key %s: %d tasks\n", key, scheduledLen)
-				// Check a few scheduled tasks for our block number
-				members, err := rdb.ZRange(ctx, key, 0, 4).Result() // Check first 5
+				// Check scheduled tasks for our block number
+				members, err := rdb.ZRange(ctx, key, 0, 49).Result() // Check first 50
 				if err == nil {
 					for _, member := range members {
-						if strings.Contains(member, fmt.Sprintf("\"block_number\":%d", blockNumber)) {
-							fmt.Printf("    FOUND BLOCK %d in scheduled tasks!\n", blockNumber)
-							break
+						searchPatterns := []string{
+							fmt.Sprintf("\"block_number\":%d", blockNumber),
+							fmt.Sprintf("\"block_number\": %d", blockNumber),
+							fmt.Sprintf("block_number:%d", blockNumber),
+							fmt.Sprintf("%d", blockNumber),
+						}
+						for _, pattern := range searchPatterns {
+							if strings.Contains(member, pattern) {
+								fmt.Printf("    FOUND BLOCK %d in scheduled tasks!\n", blockNumber)
+								// Show context of what was found
+								start := strings.Index(member, pattern)
+								end := start + len(pattern) + 20
+								if end > len(member) {
+									end = len(member)
+								}
+								fmt.Printf("      Found in context: ...%s\n", member[start:end])
+								return // Found, exit early
+							}
 						}
 					}
 				}
@@ -169,13 +204,28 @@ func checkQueuesForBlock(rdb *redis.Client, ctx context.Context, blockNumber int
 			retryLen, _ := rdb.ZCard(ctx, key).Result()
 			if retryLen > 0 {
 				fmt.Printf("    Retry key %s: %d tasks\n", key, retryLen)
-				// Check a few retry tasks for our block number
-				members, err := rdb.ZRange(ctx, key, 0, 4).Result() // Check first 5
+				// Check retry tasks for our block number
+				members, err := rdb.ZRange(ctx, key, 0, 49).Result() // Check first 50
 				if err == nil {
 					for _, member := range members {
-						if strings.Contains(member, fmt.Sprintf("\"block_number\":%d", blockNumber)) {
-							fmt.Printf("    FOUND BLOCK %d in retry tasks!\n", blockNumber)
-							break
+						searchPatterns := []string{
+							fmt.Sprintf("\"block_number\":%d", blockNumber),
+							fmt.Sprintf("\"block_number\": %d", blockNumber),
+							fmt.Sprintf("block_number:%d", blockNumber),
+							fmt.Sprintf("%d", blockNumber),
+						}
+						for _, pattern := range searchPatterns {
+							if strings.Contains(member, pattern) {
+								fmt.Printf("    FOUND BLOCK %d in retry tasks!\n", blockNumber)
+								// Show context of what was found
+								start := strings.Index(member, pattern)
+								end := start + len(pattern) + 20
+								if end > len(member) {
+									end = len(member)
+								}
+								fmt.Printf("      Found in context: ...%s\n", member[start:end])
+								return // Found, exit early
+							}
 						}
 					}
 				}
@@ -190,13 +240,28 @@ func checkQueuesForBlock(rdb *redis.Client, ctx context.Context, blockNumber int
 			deadLen, _ := rdb.ZCard(ctx, key).Result()
 			if deadLen > 0 {
 				fmt.Printf("    Dead key %s: %d tasks\n", key, deadLen)
-				// Check a few dead tasks for our block number
-				members, err := rdb.ZRange(ctx, key, 0, 4).Result() // Check first 5
+				// Check dead tasks for our block number
+				members, err := rdb.ZRange(ctx, key, 0, 49).Result() // Check first 50
 				if err == nil {
 					for _, member := range members {
-						if strings.Contains(member, fmt.Sprintf("\"block_number\":%d", blockNumber)) {
-							fmt.Printf("    FOUND BLOCK %d in dead tasks!\n", blockNumber)
-							break
+						searchPatterns := []string{
+							fmt.Sprintf("\"block_number\":%d", blockNumber),
+							fmt.Sprintf("\"block_number\": %d", blockNumber),
+							fmt.Sprintf("block_number:%d", blockNumber),
+							fmt.Sprintf("%d", blockNumber),
+						}
+						for _, pattern := range searchPatterns {
+							if strings.Contains(member, pattern) {
+								fmt.Printf("    FOUND BLOCK %d in dead tasks!\n", blockNumber)
+								// Show context of what was found
+								start := strings.Index(member, pattern)
+								end := start + len(pattern) + 20
+								if end > len(member) {
+									end = len(member)
+								}
+								fmt.Printf("      Found in context: ...%s\n", member[start:end])
+								return // Found, exit early
+							}
 						}
 					}
 				}
