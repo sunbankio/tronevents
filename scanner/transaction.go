@@ -127,6 +127,11 @@ func parseTransactionWithInfo(tx *api.TransactionExtention, txInfo *core.Transac
 						Address:   byteAddrToString(log.Address),
 					}
 
+					// Add signature from the first topic if available
+					if len(log.Topics) > 0 {
+						logInfo.Signature = hex.EncodeToString(log.Topics[0])
+					}
+
 					// Convert decoded event parameters
 					if len(decodedEvent.Parameters) > 0 {
 						logInfo.Inputs = make([]EventInput, len(decodedEvent.Parameters))
@@ -145,17 +150,13 @@ func parseTransactionWithInfo(tx *api.TransactionExtention, txInfo *core.Transac
 					logInfo := LogInfo{
 						Address: byteAddrToString(log.Address),
 					}
+					// Add signature from the first topic if available even when decoding fails
+					if len(log.Topics) > 0 {
+						logInfo.Signature = hex.EncodeToString(log.Topics[0])
+					}
 					transaction.Logs = append(transaction.Logs, logInfo)
 				}
 			}
-		}
-	}
-
-	// Extract signers from transaction signatures (in case they weren't in the basic transaction)
-	if len(transaction.Signers) == 0 {
-		signers, err := recoverSignersFromTransaction(tx)
-		if err == nil && len(signers) > 0 {
-			transaction.Signers = signers
 		}
 	}
 
