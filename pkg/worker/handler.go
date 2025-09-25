@@ -9,21 +9,24 @@ import (
 	"github.com/hibiken/asynq"
 	"github.com/sunbankio/tronevents/pkg/publisher"
 	"github.com/sunbankio/tronevents/pkg/scanner"
+	"github.com/sunbankio/tronevents/pkg/storage"
 )
 
 // Handler processes Asynq tasks
 type Handler struct {
-	tronScanner *scanner.Scanner
-	publisher   *publisher.EventPublisher
-	logger      *log.Logger
+	tronScanner       *scanner.Scanner
+	publisher         *publisher.EventPublisher
+	logger            *log.Logger
+	blockProcessedStorage *storage.BlockProcessedStorage
 }
 
 // NewHandler creates a new task handler
-func NewHandler(tronScanner *scanner.Scanner, publisher *publisher.EventPublisher, logger *log.Logger) *Handler {
+func NewHandler(tronScanner *scanner.Scanner, publisher *publisher.EventPublisher, blockProcessedStorage *storage.BlockProcessedStorage, logger *log.Logger) *Handler {
 	return &Handler{
-		tronScanner: tronScanner,
-		publisher:   publisher,
-		logger:      logger,
+		tronScanner:       tronScanner,
+		publisher:         publisher,
+		logger:            logger,
+		blockProcessedStorage: blockProcessedStorage,
 	}
 }
 
@@ -45,30 +48,51 @@ func (h *Handler) HandleTask(ctx context.Context, t *asynq.Task) error {
 		return err
 	}
 
-	h.logger.Printf("DEBUG: Worker processing block %d", int64(blockNum))
+	blockNumber := int64(blockNum)
+	h.logger.Printf("DEBUG: Worker processing block %d", blockNumber)
 
-	// Get transactions for this specific block
-	transactions, err := h.tronScanner.GetTransactionsByBlock(int64(blockNum))
+	// Check if block has already been processed (idempotent processing)
+	alreadyProcessed, err := h.blockProcessedStorage.IsProcessed(ctx, blockNumber)
 	if err != nil {
-		h.logger.Printf("ERROR: Failed to get transactions for block %d: %v", int64(blockNum), err)
+		h.logger.Printf("ERROR: Failed to check if block %d was already processed: %v", blockNumber, err)
 		return err
 	}
 
-	h.logger.Printf("DEBUG: Retrieved %d transactions for block %d", len(transactions), int64(blockNum))
-
-	// Publish these transactions to the Redis stream
-	publishedCount := 0
-	errorCount := 0
-
-	for _, tx := range transactions {
-		if err := h.publisher.Publish(context.Background(), &tx); err != nil {
-			errorCount++
-		} else {
-			publishedCount++
-		}
+	if alreadyProcessed {
+		h.logger.Printf("DEBUG: Block %d already processed, skipping", blockNumber)
+		return nil
 	}
 
-	h.logger.Printf("DEBUG: Successfully processed block %d, published %d transactions, %d errors", int64(blockNum), publishedCount, errorCount)
+	// Get transactions for this specific block
+	transactions, err := h.tronScanner.GetTransactionsByBlock(blockNumber)
+	if err != nil {
+		h.logger.Printf("ERROR: Failed to get transactions for block %d: %v", blockNumber, err)
+		return err
+	}
+
+	h.logger.Printf("DEBUG: Retrieved %d transactions for block %d", len(transactions), blockNumber)
+
+	// Publish these transactions to the Redis stream in batch
+	// Convert slice of values to slice of pointers for batch publishing
+	transactionPointers := make([]*scanner.Transaction, len(transactions))
+	for i := range transactions {
+		transactionPointers[i] = &transactions[i]
+	}
+
+	if err := h.publisher.PublishBatch(context.Background(), transactionPointers); err != nil {
+		h.logger.Printf("ERROR: Failed to publish batch of %d transactions for block %d: %v", len(transactions), blockNumber, err)
+		return err
+	}
+	publishedCount := len(transactions)
+	errorCount := 0
+
+	// Mark the block as processed to prevent duplicate processing
+	if err := h.blockProcessedStorage.MarkProcessed(ctx, blockNumber); err != nil {
+		h.logger.Printf("ERROR: Failed to mark block %d as processed: %v", blockNumber, err)
+		return err
+	}
+
+	h.logger.Printf("DEBUG: Successfully processed block %d, published %d transactions, %d errors", blockNumber, publishedCount, errorCount)
 
 	return nil
 }

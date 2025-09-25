@@ -12,6 +12,7 @@ import (
 	"github.com/sunbankio/tronevents/pkg/monitoring"
 	"github.com/sunbankio/tronevents/pkg/publisher"
 	redisPkg "github.com/sunbankio/tronevents/pkg/redis"
+	"github.com/sunbankio/tronevents/pkg/scanner"
 	tronScanner "github.com/sunbankio/tronevents/pkg/scanner"
 	"github.com/sunbankio/tronevents/pkg/storage"
 	"github.com/sunbankio/tronevents/pkg/worker"
@@ -19,16 +20,17 @@ import (
 
 // Service orchestrates all the components of the daemon.
 type Service struct {
-	config        *config.Config
-	redisClient   *goRedis.Client
-	asynqClient   *asynq.Client
-	asynqServer   *asynq.Server
-	tronScanner   *tronScanner.Scanner
-	storage       *storage.RedisStorage
-	publisher     *publisher.EventPublisher
-	workerManager *worker.Manager
-	monitoring    *monitoring.Metrics
-	logger        *log.Logger
+	config                *config.Config
+	redisClient           *goRedis.Client
+	asynqClient           *asynq.Client
+	asynqServer           *asynq.Server
+	tronScanner           *tronScanner.Scanner
+	storage               *storage.RedisStorage
+	publisher             *publisher.EventPublisher
+	workerManager         *worker.Manager
+	monitoring            *monitoring.Metrics
+	logger                *log.Logger
+	blockProcessedStorage *storage.BlockProcessedStorage
 }
 
 // WorkerManager returns the worker manager for shutdown handling.
@@ -65,22 +67,24 @@ func NewService(cfg *config.Config) *Service {
 		panic(err)
 	}
 
-	storage := storage.NewRedisStorage(goRedisClient, "last_synced_block")
+	redisStorage := storage.NewRedisStorage(goRedisClient, "last_synced_block")
+	blockProcessedStorage := storage.NewBlockProcessedStorage(goRedisClient, "tron:processed_blocks")
 	publisher := publisher.NewEventPublisher(goRedisClient)
 	workerManager := worker.NewManager(asynqServer, log.Default())
 	monitoring := monitoring.NewMetrics()
 
 	return &Service{
-		config:        cfg,
-		redisClient:   goRedisClient,
-		asynqClient:   asynqClient,
-		asynqServer:   asynqServer,
-		tronScanner:   tronScannerInstance,
-		storage:       storage,
-		publisher:     publisher,
-		workerManager: workerManager,
-		monitoring:    monitoring,
-		logger:        log.Default(),
+		config:                cfg,
+		redisClient:           goRedisClient,
+		asynqClient:           asynqClient,
+		asynqServer:           asynqServer,
+		tronScanner:           tronScannerInstance,
+		storage:               redisStorage,
+		publisher:             publisher,
+		workerManager:         workerManager,
+		monitoring:            monitoring,
+		logger:                log.Default(),
+		blockProcessedStorage: blockProcessedStorage,
 	}
 }
 
@@ -91,7 +95,7 @@ func (s *Service) Run() {
 	defer cancel()
 
 	// Create and register the proper task handler for the worker
-	handler := worker.NewHandler(s.tronScanner, s.publisher, s.logger)
+	handler := worker.NewHandler(s.tronScanner, s.publisher, s.blockProcessedStorage, s.logger)
 	mux := asynq.NewServeMux()
 	worker.RegisterHandlers(mux, handler)
 
@@ -107,7 +111,7 @@ func (s *Service) Run() {
 // RunWithContext starts the daemon service with a context for cancellation
 func (s *Service) RunWithContext(ctx context.Context) {
 	// Create and register the proper task handler for the worker
-	handler := worker.NewHandler(s.tronScanner, s.publisher, s.logger)
+	handler := worker.NewHandler(s.tronScanner, s.publisher, s.blockProcessedStorage, s.logger)
 	mux := asynq.NewServeMux()
 	worker.RegisterHandlers(mux, handler)
 
@@ -118,6 +122,39 @@ func (s *Service) RunWithContext(ctx context.Context) {
 
 	// Main processing loop
 	s.runLoop(ctx)
+}
+
+// batchEnqueueBlocks enqueues multiple blocks in batch to reduce Redis operations
+func (s *Service) batchEnqueueBlocks(blockNumbers []int64, queueName string) {
+	if len(blockNumbers) == 0 {
+		return
+	}
+
+	// Process in smaller batches to avoid overwhelming Redis
+	batchSize := 100 // Process up to 100 blocks at a time
+	for i := 0; i < len(blockNumbers); i += batchSize {
+		end := i + batchSize
+		if end > len(blockNumbers) {
+			end = len(blockNumbers)
+		}
+
+		batch := blockNumbers[i:end]
+
+		// Create all tasks first, then enqueue them using Asynq's client
+		for _, blockNum := range batch {
+			payload, err := json.Marshal(map[string]interface{}{"block_number": blockNum})
+			if err != nil {
+				s.logger.Printf("Error marshaling payload for block %d: %v", blockNum, err)
+				continue
+			}
+			task := asynq.NewTask("block:process", payload)
+			if _, err := s.asynqClient.Enqueue(task, asynq.Queue(queueName)); err != nil {
+				s.logger.Printf("Error enqueuing block %d: %v", blockNum, err)
+			} else {
+				s.logger.Printf("DEBUG: Successfully enqueued block %d to %s queue", blockNum, queueName)
+			}
+		}
+	}
 }
 
 // runLoop contains the main processing logic
@@ -160,12 +197,15 @@ func (s *Service) runLoop(ctx context.Context) {
 			continue
 		}
 
-		// Publish result to Redis stream (transactions from the current block)
+		// Publish result to Redis stream (transactions from the current block) in batch
 		s.logger.Printf("DEBUG: Publishing %d transactions from block %d to Redis stream", len(transactions), returnedBlockNum)
-		for _, tx := range transactions {
-			if err := s.publisher.Publish(context.Background(), &tx); err != nil {
-				s.logger.Printf("Error publishing transaction: %v", err)
-			}
+		// Convert slice of values to slice of pointers for batch publishing
+		transactionPointers := make([]*scanner.Transaction, len(transactions))
+		for i := range transactions {
+			transactionPointers[i] = &transactions[i]
+		}
+		if err := s.publisher.PublishBatch(context.Background(), transactionPointers); err != nil {
+			s.logger.Printf("Error publishing batch of transactions: %v", err)
 		}
 
 		// Program first run, or we are in sync, no backlog
@@ -187,19 +227,13 @@ func (s *Service) runLoop(ctx context.Context) {
 		if returnedBlockNum <= lastSyncedBlock+20 {
 			s.logger.Printf("DEBUG: Slight backlog detected - lastSynced: %d, returned: %d, gap: %d blocks", lastSyncedBlock, returnedBlockNum, returnedBlockNum-lastSyncedBlock-1)
 
+			// Batch enqueue blocks to reduce Redis operations
+			blockNumbers := make([]int64, 0, returnedBlockNum-lastSyncedBlock-1)
 			for blockNum := lastSyncedBlock + 1; blockNum < returnedBlockNum; blockNum++ {
-				payload, err := json.Marshal(map[string]interface{}{"block_number": blockNum})
-				if err != nil {
-					s.logger.Printf("Error marshaling payload for block %d: %v", blockNum, err)
-					continue
-				}
-				task := asynq.NewTask("block:process", payload)
-				if _, err := s.asynqClient.Enqueue(task, asynq.Queue("priority")); err != nil {
-					s.logger.Printf("Error enqueuing block %d: %v", blockNum, err)
-				} else {
-					s.logger.Printf("DEBUG: Successfully enqueued block %d to priority queue", blockNum)
-				}
+				blockNumbers = append(blockNumbers, blockNum)
 			}
+
+			s.batchEnqueueBlocks(blockNumbers, "priority")
 
 			// Update last synced_block
 			if err := s.storage.Save(ctx, returnedBlockNum); err != nil {
@@ -225,19 +259,13 @@ func (s *Service) runLoop(ctx context.Context) {
 
 		s.logger.Printf("DEBUG: Large backlog - queuing range: %d to %d", startBlock, returnedBlockNum-1)
 
+		// Batch enqueue blocks to reduce Redis operations
+		blockNumbers := make([]int64, 0, returnedBlockNum-startBlock)
 		for blockNum := startBlock; blockNum < returnedBlockNum; blockNum++ {
-			payload, err := json.Marshal(map[string]interface{}{"block_number": blockNum})
-			if err != nil {
-				s.logger.Printf("Error marshaling payload for block %d: %v", blockNum, err)
-				continue
-			}
-			task := asynq.NewTask("block:process", payload)
-			if _, err := s.asynqClient.Enqueue(task, asynq.Queue("backlog")); err != nil {
-				s.logger.Printf("Error enqueuing block %d: %v", blockNum, err)
-			} else {
-				s.logger.Printf("DEBUG: Successfully enqueued block %d to backlog queue", blockNum)
-			}
+			blockNumbers = append(blockNumbers, blockNum)
 		}
+
+		s.batchEnqueueBlocks(blockNumbers, "backlog")
 
 		// Update last synced_block
 		if err := s.storage.Save(ctx, returnedBlockNum); err != nil {
