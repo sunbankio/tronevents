@@ -50,15 +50,10 @@ func (s *Scanner) Scan(blockNumber int64) ([]Transaction, error) {
 		return nil, err
 	}
 
+	// Get transaction info - assuming it always exists for block transactions
 	txInfoList, err := s.getTransactionInfoByNumber(blockNumber)
 	if err != nil {
-		// If we can't get transaction info, fall back to basic parsing
-		transactions := make([]Transaction, 0, len(block.Transactions))
-		for _, tx := range block.Transactions {
-			transaction := parseTransaction(tx)
-			transactions = append(transactions, transaction)
-		}
-		return transactions, nil
+		return nil, err
 	}
 
 	// Create a map of transaction info by transaction ID for easy lookup
@@ -68,21 +63,21 @@ func (s *Scanner) Scan(blockNumber int64) ([]Transaction, error) {
 		txInfoMap[txID] = txInfo
 	}
 
-	// Process each transaction with enhanced data
+	// Process each transaction with enhanced data from txinfo
 	transactions := make([]Transaction, 0, len(block.Transactions))
 	for _, tx := range block.Transactions {
 		txID := hex.EncodeToString(tx.Txid)
 
-		// Parse the basic transaction first
-		transaction := parseTransaction(tx)
-
 		// Look for corresponding transaction info and enhance the transaction
 		if txInfo, exists := txInfoMap[txID]; exists {
-			// Extract energy usage and logs from txInfo and add to transaction
-			transaction = parseTransactionWithInfo(tx, txInfo)
+			// Parse the transaction with the available info
+			transaction := parseTransactionWithInfo(tx, txInfo)
+			transactions = append(transactions, transaction)
+		} else {
+			// This should not happen if txinfo always exists, but handle gracefully
+			transaction := parseTransaction(tx)
+			transactions = append(transactions, transaction)
 		}
-
-		transactions = append(transactions, transaction)
 	}
 
 	return transactions, nil
