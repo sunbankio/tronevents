@@ -17,6 +17,9 @@ type Transaction struct {
 	Contract      Contract  `json:"contract"`
 	Ret           RetInfo   `json:"ret"`
 	Timestamp     time.Time `json:"timestamp"`
+	BlockNumber   int64     `json:"block_number,omitempty"`
+	BlockTimestamp time.Time `json:"block_timestamp,omitempty"`
+	Expiration    time.Time `json:"expiration,omitempty"`
 	EnergyUsed    int64     `json:"energy_used,omitempty"`
 	BandwidthUsed int64     `json:"bandwidth_used,omitempty"`
 	Logs          []LogInfo `json:"logs,omitempty"`
@@ -46,7 +49,7 @@ type EventInput struct {
 type Contract struct {
 	Type         string      `json:"type"`
 	Parameter    interface{} `json:"parameter"`
-	PermissionID int         `json:"permission_id,omitempty"`
+	PermissionID int         `json:"permission_id"`
 }
 
 // TransferContract represents a transfer transaction
@@ -62,7 +65,6 @@ type DelegateResourceContract struct {
 	ReceiverAddress string `json:"receiver_address"`
 	Resource        string `json:"resource,omitempty"`
 	Balance         int64  `json:"balance"`
-	PermissionID    int    `json:"permission_id,omitempty"`
 	Lock            bool   `json:"lock,omitempty"`
 	LockPeriod      int64  `json:"lock_period,omitempty"`
 }
@@ -73,7 +75,6 @@ type UnDelegateResourceContract struct {
 	ReceiverAddress string `json:"receiver_address"`
 	Resource        string `json:"resource,omitempty"`
 	Balance         int64  `json:"balance"`
-	PermissionID    int    `json:"permission_id,omitempty"`
 }
 
 // TriggerSmartContract represents a smart contract trigger transaction
@@ -157,6 +158,11 @@ func ParseTransaction(tx *api.TransactionExtention) Transaction {
 	if tx.Transaction != nil && tx.Transaction.RawData != nil {
 		transaction.Timestamp = time.Unix(tx.Transaction.RawData.Timestamp/1000, 0)
 
+		// Parse expiration time
+		if tx.Transaction.RawData.Expiration > 0 {
+			transaction.Expiration = time.Unix(tx.Transaction.RawData.Expiration/1000, 0)
+		}
+
 		// Parse contract if exists
 		if len(tx.Transaction.RawData.Contract) > 0 {
 			contract := tx.Transaction.RawData.Contract[0]
@@ -193,7 +199,6 @@ func ParseTransaction(tx *api.TransactionExtention) Transaction {
 						} else {
 							contractData.Resource = "BANDWIDTH"
 						}
-						// Skip PermissionId as it may not be available in this version
 						transaction.Contract = Contract{
 							Type:      "DelegateResourceContract",
 							Parameter: contractData,
@@ -215,7 +220,6 @@ func ParseTransaction(tx *api.TransactionExtention) Transaction {
 						} else {
 							contractData.Resource = "BANDWIDTH"
 						}
-						// Skip PermissionId as it may not be available in this version
 						transaction.Contract = Contract{
 							Type:      "UnDelegateResourceContract",
 							Parameter: contractData,
@@ -284,10 +288,8 @@ func ParseTransaction(tx *api.TransactionExtention) Transaction {
 				}
 			}
 
-			// Handle permission ID if present (skip for now as it may not be available)
-			// if contract.PermissionId != 0 {
-			// 	transaction.Contract.PermissionID = int(contract.PermissionId)
-			// }
+			// Handle permission ID
+			transaction.Contract.PermissionID = int(contract.PermissionId)
 		}
 	}
 
@@ -301,10 +303,20 @@ func ParseTransactionWithInfo(tx *api.TransactionExtention, txInfo *core.Transac
 
 	// Enhance with additional info from TransactionInfo
 	if txInfo != nil {
+		// Add block information
+		transaction.BlockNumber = txInfo.BlockNumber
+		if txInfo.BlockTimeStamp > 0 {
+			transaction.BlockTimestamp = time.Unix(txInfo.BlockTimeStamp/1000, 0)
+		}
+
 		// Add energy usage info
 		if txInfo.Receipt != nil {
 			if txInfo.Receipt.EnergyUsage > 0 {
 				transaction.EnergyUsed = txInfo.Receipt.EnergyUsage
+			}
+			// Add net usage info
+			if txInfo.Receipt.NetUsage > 0 {
+				transaction.BandwidthUsed = txInfo.Receipt.NetUsage
 			}
 			// We could also add other energy-related fields if needed:
 			// EnergyUsageTotal, OriginEnergyUsage, EnergyPenaltyTotal
@@ -354,7 +366,19 @@ func PrintTransaction(tx Transaction) {
 	fmt.Println("----- Transaction -----")
 	fmt.Printf("Transaction ID: %s\n", tx.ID)
 	fmt.Printf("Timestamp: %s\n", tx.Timestamp.Format("2006-01-02 15:04:05"))
+	if tx.BlockNumber > 0 {
+		fmt.Printf("Block Number: %d\n", tx.BlockNumber)
+	}
+	if !tx.BlockTimestamp.IsZero() {
+		fmt.Printf("Block Timestamp: %s\n", tx.BlockTimestamp.Format("2006-01-02 15:04:05"))
+	}
+	if !tx.Expiration.IsZero() {
+		fmt.Printf("Expiration: %s\n", tx.Expiration.Format("2006-01-02 15:04:05"))
+	}
 	fmt.Printf("Contract Type: %s\n", tx.Contract.Type)
+	if tx.Contract.PermissionID != 0 {
+		fmt.Printf("Contract Permission ID: %d\n", tx.Contract.PermissionID)
+	}
 
 	switch param := tx.Contract.Parameter.(type) {
 	case TransferContract:
@@ -366,17 +390,11 @@ func PrintTransaction(tx Transaction) {
 		fmt.Printf("To: %s\n", param.ReceiverAddress)
 		fmt.Printf("Resource: %s\n", param.Resource)
 		fmt.Printf("Balance: %d\n", param.Balance)
-		if param.PermissionID != 0 {
-			fmt.Printf("Permission ID: %d\n", param.PermissionID)
-		}
 	case UnDelegateResourceContract:
 		fmt.Printf("From: %s\n", param.OwnerAddress)
 		fmt.Printf("To: %s\n", param.ReceiverAddress)
 		fmt.Printf("Resource: %s\n", param.Resource)
 		fmt.Printf("Balance: %d\n", param.Balance)
-		if param.PermissionID != 0 {
-			fmt.Printf("Permission ID: %d\n", param.PermissionID)
-		}
 	case TriggerSmartContract:
 		fmt.Printf("Owner: %s\n", param.OwnerAddress)
 		fmt.Printf("Contract: %s\n", param.ContractAddress)
@@ -401,6 +419,11 @@ func PrintTransaction(tx Transaction) {
 	// Display energy used if available
 	if tx.EnergyUsed > 0 {
 		fmt.Printf("Energy Used: %d\n", tx.EnergyUsed)
+	}
+
+	// Display bandwidth used if available
+	if tx.BandwidthUsed > 0 {
+		fmt.Printf("Bandwidth Used: %d\n", tx.BandwidthUsed)
 	}
 
 	// Display logs if available

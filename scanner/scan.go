@@ -46,27 +46,48 @@ func (s *Scanner) Close() {
 }
 
 func (s *Scanner) Scan(blockNumber int64) ([]Transaction, error) {
+	// Get both block data and transaction info
 	block, err := s.getBlockByNumber(blockNumber)
 	if err != nil {
 		return nil, err
 	}
-	txinfo, err := s.getTransactionInfoByNumber(blockNumber)
+
+	txInfoList, err := s.getTransactionInfoByNumber(blockNumber)
 	if err != nil {
-		return nil, err
+		// If we can't get transaction info, fall back to basic parsing
+		transactions := make([]Transaction, 0, len(block.Transactions))
+		for _, tx := range block.Transactions {
+			transaction := ParseTransaction(tx)
+			transactions = append(transactions, transaction)
+		}
+		return transactions, nil
 	}
-	// fmt.Println(block)
 
+	// Create a map of transaction info by transaction ID for easy lookup
+	txInfoMap := make(map[string]*core.TransactionInfo)
+	for _, txInfo := range txInfoList.TransactionInfo {
+		txID := hex.EncodeToString(txInfo.Id)
+		txInfoMap[txID] = txInfo
+	}
+
+	// Process each transaction with enhanced data
+	transactions := make([]Transaction, 0, len(block.Transactions))
 	for _, tx := range block.Transactions {
-		// fmt.Println("----- Transaction -----")
-		fmt.Printf("Transaction ID: %x\n", tx.Txid)
-		fmt.Printf("Contract : %v\n", tx.Transaction)
+		txID := hex.EncodeToString(tx.Txid)
 
+		// Parse the basic transaction first
+		transaction := ParseTransaction(tx)
+
+		// Look for corresponding transaction info and enhance the transaction
+		if txInfo, exists := txInfoMap[txID]; exists {
+			// Extract energy usage and logs from txInfo and add to transaction
+			transaction = ParseTransactionWithInfo(tx, txInfo)
+		}
+
+		transactions = append(transactions, transaction)
 	}
-	for _, tx := range txinfo.TransactionInfo {
-		fmt.Printf("Transaction Info ID: %x\n", tx.Id)
-		fmt.Printf("Transaction Info : %v\n", tx)
-	}
-	return nil, nil
+
+	return transactions, nil
 }
 
 func (s *Scanner) ScanStructured(blockNumber int64) error {
@@ -163,6 +184,9 @@ func (s *Scanner) ScanTransactionInfo(blockNumber int64) error {
 			}
 			if txInfo.Receipt.EnergyPenaltyTotal > 0 {
 				fmt.Printf("Energy Penalty Total: %d\n", txInfo.Receipt.EnergyPenaltyTotal)
+			}
+			if txInfo.Receipt.NetUsage > 0 {
+				fmt.Printf("Net Usage: %d\n", txInfo.Receipt.NetUsage)
 			}
 		}
 
