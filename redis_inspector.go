@@ -7,7 +7,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/go-redis/redis/v8"
+	"github.com/redis/go-redis/v9"
 	"github.com/hibiken/asynq"
 )
 
@@ -111,56 +111,70 @@ func main() {
 
 	// Check for TRON-specific keys mentioned in the code
 	fmt.Println("\n=== TRON-specific Keys ===")
-	tronKeys := []string{"tron:events", "tron:last_synced_block", "tron:retry_queue", "tron:dlq"}
+	tronKeys := []string{"tron:events", "last_synced_block", "tron:processed_blocks"}
 	for _, key := range tronKeys {
-		exists, err := rdb.Exists(ctx, key).Result()
-		if err != nil {
-			fmt.Printf("  %s: error checking existence - %v\n", key, err)
-			continue
-		}
-		if exists > 0 {
-			keyType, err := rdb.Type(ctx, key).Result()
-			if err != nil {
-				fmt.Printf("  %s: exists, type error - %v\n", key, err)
-				continue
-			}
+	  exists, err := rdb.Exists(ctx, key).Result()
+	  if err != nil {
+	    fmt.Printf("  %s: error checking existence - %v\n", key, err)
+	    continue
+	  }
+	  if exists > 0 {
+	    keyType, err := rdb.Type(ctx, key).Result()
+	    if err != nil {
+	      fmt.Printf("  %s: exists, type error - %v\n", key, err)
+	      continue
+	    }
 
-			switch keyType {
-			case "stream":
-				info, err := rdb.XInfoStream(ctx, key).Result()
-				if err != nil {
-					fmt.Printf("  %s: type: stream, info error - %v\n", key, err)
-				} else {
-					fmt.Printf("  %s: type: stream, length: %d, first_entry: %s, last_entry: %s\n", 
-						key, info.Length, info.FirstEntry.ID, info.LastEntry.ID)
-				}
-			case "string":
-				value, err := rdb.Get(ctx, key).Result()
-				if err != nil {
-					fmt.Printf("  %s: type: string, value error - %v\n", key, err)
-				} else {
-					fmt.Printf("  %s: type: string, value: %s\n", key, value)
-				}
-			case "list":
-				length, err := rdb.LLen(ctx, key).Result()
-				if err != nil {
-					fmt.Printf("  %s: type: list, length error - %v\n", key, err)
-				} else {
-					fmt.Printf("  %s: type: list, length: %d\n", key, length)
-				}
-			case "zset":
-				card, err := rdb.ZCard(ctx, key).Result()
-				if err != nil {
-					fmt.Printf("  %s: type: zset, cardinality error - %v\n", key, err)
-				} else {
-					fmt.Printf("  %s: type: zset, cardinality: %d\n", key, card)
-				}
-			default:
-				fmt.Printf("  %s: type: %s\n", key, keyType)
-			}
-		} else {
-			fmt.Printf("  %s: does not exist\n", key)
-		}
+	    switch keyType {
+	    case "stream":
+	      info, err := rdb.XInfoStream(ctx, key).Result()
+	      if err != nil {
+	        // Handle the case where XINFO STREAM returns unexpected number of fields
+	        // Try to get basic stream info using XLen instead
+	        length, lenErr := rdb.XLen(ctx, key).Result()
+	        if lenErr != nil {
+	          fmt.Printf("  %s: type: stream, info error - %v (XLen also failed: %v)\n", key, err, lenErr)
+	        } else {
+	          fmt.Printf("  %s: type: stream, length: %d (XINFO error: %v)\n", key, length, err)
+	        }
+	      } else {
+	        fmt.Printf("  %s: type: stream, length: %d, first_entry: %s, last_entry: %s\n",
+	          key, info.Length, info.FirstEntry.ID, info.LastEntry.ID)
+	      }
+	    case "string":
+	      value, err := rdb.Get(ctx, key).Result()
+	      if err != nil {
+	        fmt.Printf("  %s: type: string, value error - %v\n", key, err)
+	      } else {
+	        fmt.Printf("  %s: type: string, value: %s\n", key, value)
+	      }
+	    case "set":
+	      card, err := rdb.SCard(ctx, key).Result()
+	      if err != nil {
+	        fmt.Printf("  %s: type: set, cardinality error - %v\n", key, err)
+	      } else {
+	        fmt.Printf("  %s: type: set, cardinality: %d\n", key, card)
+	      }
+	    case "list":
+	      length, err := rdb.LLen(ctx, key).Result()
+	      if err != nil {
+	        fmt.Printf("  %s: type: list, length error - %v\n", key, err)
+	      } else {
+	        fmt.Printf("  %s: type: list, length: %d\n", key, length)
+	      }
+	    case "zset":
+	      card, err := rdb.ZCard(ctx, key).Result()
+	      if err != nil {
+	        fmt.Printf("  %s: type: zset, cardinality error - %v\n", key, err)
+	      } else {
+	        fmt.Printf("  %s: type: zset, cardinality: %d\n", key, card)
+	      }
+	    default:
+	      fmt.Printf("  %s: type: %s\n", key, keyType)
+	    }
+	  } else {
+	    fmt.Printf("  %s: does not exist\n", key)
+	  }
 	}
 
 	// Check Asynq server info if available
@@ -171,19 +185,135 @@ func main() {
 	// Get queue names
 	queueNames, err := inspector.Queues()
 	if err != nil {
-		fmt.Printf("Error getting queue names: %v\n", err)
+	  fmt.Printf("Error getting queue names: %v\n", err)
 	} else {
-		fmt.Printf("Queues found: %v\n", queueNames)
-		for _, queue := range queueNames {
-			qInfo, err := inspector.GetQueueInfo(queue)
-			if err != nil {
-				fmt.Printf("  %s: error getting info - %v\n", queue, err)
-				continue
-			}
-			// Note: The correct fields are Active, Pending, Completed, Retry, Paused
-			fmt.Printf("  %s: active: %d, pending: %d, completed: %d, retry: %d, paused: %t\n",
-				queue, qInfo.Active, qInfo.Pending, qInfo.Completed, qInfo.Retry, qInfo.Paused)
-		}
+	  fmt.Printf("Queues found: %v\n", queueNames)
+	  for _, queue := range queueNames {
+	    qInfo, err := inspector.GetQueueInfo(queue)
+	    if err != nil {
+	      fmt.Printf("  %s: error getting info - %v\n", queue, err)
+	      continue
+	    }
+	    // Note: The correct fields are Active, Pending, Completed, Retry, Paused
+	    fmt.Printf("  %s: active: %d, pending: %d, completed: %d, retry: %d, paused: %t\n",
+	      queue, qInfo.Active, qInfo.Pending, qInfo.Completed, qInfo.Retry, qInfo.Paused)
+	  }
+	}
+	
+	// Check for specific Asynq queue keys that might not be reported by the inspector
+	// but are used by the application based on the codebase analysis
+	fmt.Println("\n=== Asynq Queue Keys Analysis ===")
+	asynqQueueKeys := []string{
+	  "asynq:{priority}:t:",  // Individual priority queue tasks (prefix)
+	  "asynq:{backlog}:t:",   // Individual backlog queue tasks (prefix)
+	  "asynq:{priority}:retry",  // Priority queue retry tasks
+	  "asynq:{backlog}:retry",   // Backlog queue retry tasks
+	  "asynq:{priority}:dead",   // Priority queue dead letter tasks
+	  "asynq:{backlog}:dead",    // Backlog queue dead letter tasks
+	  "asynq:{priority}:processed", // Priority queue processed counter
+	  "asynq:{backlog}:processed",  // Backlog queue processed counter
+	  "asynq:{priority}:failed",    // Priority queue failed counter
+	  "asynq:{backlog}:failed",     // Backlog queue failed counter
+	}
+	
+	// Find keys that match the patterns
+	for _, keyPattern := range asynqQueueKeys {
+	  pattern := keyPattern + "*"
+	  if keyPattern == "asynq:{priority}:processed" ||
+	     keyPattern == "asynq:{backlog}:processed" ||
+	     keyPattern == "asynq:{priority}:failed" ||
+	     keyPattern == "asynq:{backlog}:failed" {
+	    // These are exact keys, not patterns
+	    pattern = keyPattern
+	  }
+	  
+	  if strings.Contains(pattern, "{priority}") || strings.Contains(pattern, "{backlog}") {
+	    // Look for keys that match the pattern
+	    matchingKeys, err := rdb.Keys(ctx, pattern).Result()
+	    if err != nil {
+	      fmt.Printf("  Error searching for keys with pattern %s: %v\n", pattern, err)
+	      continue
+	    }
+	    
+	    if len(matchingKeys) > 0 {
+	      fmt.Printf("  Found %d keys matching pattern %s:\n", len(matchingKeys), keyPattern)
+	      for _, key := range matchingKeys {
+	        keyType, err := rdb.Type(ctx, key).Result()
+	        if err != nil {
+	          fmt.Printf("    - %s (type: error - %v)\n", key, err)
+	          continue
+	        }
+	        
+	        switch keyType {
+	        case "string":
+	          value, err := rdb.Get(ctx, key).Result()
+	          if err != nil {
+	            fmt.Printf("    - %s (type: string, value: error - %v)\n", key, err)
+	          } else {
+	            fmt.Printf("    - %s (type: string, value: %s)\n", key, value)
+	          }
+	        case "list":
+	          length, err := rdb.LLen(ctx, key).Result()
+	          if err != nil {
+	            fmt.Printf("    - %s (type: list, length: error - %v)\n", key, err)
+	          } else {
+	            fmt.Printf("    - %s (type: list, length: %d)\n", key, length)
+	          }
+	        case "set":
+	          card, err := rdb.SCard(ctx, key).Result()
+	          if err != nil {
+	            fmt.Printf("    - %s (type: set, cardinality: error - %v)\n", key, err)
+	          } else {
+	            fmt.Printf("    - %s (type: set, cardinality: %d)\n", key, card)
+	          }
+	        case "zset":
+	          card, err := rdb.ZCard(ctx, key).Result()
+	          if err != nil {
+	            fmt.Printf("    - %s (type: zset, cardinality: error - %v)\n", key, err)
+	          } else {
+	            fmt.Printf("    - %s (type: zset, cardinality: %d)\n", key, card)
+	          }
+	        case "hash":
+	          card, err := rdb.HLen(ctx, key).Result()
+	          if err != nil {
+	            fmt.Printf("    - %s (type: hash, fields: error - %v)\n", key, err)
+	          } else {
+	            fmt.Printf("    - %s (type: hash, fields: %d)\n", key, card)
+	          }
+	        default:
+	          fmt.Printf("    - %s (type: %s)\n", key, keyType)
+	        }
+	      }
+	    } else {
+	      // Check if the exact key exists (for counters)
+	      exists, err := rdb.Exists(ctx, pattern).Result()
+	      if err != nil {
+	        fmt.Printf("  Error checking existence of key %s: %v\n", pattern, err)
+	        continue
+	      }
+	      if exists > 0 {
+	        keyType, err := rdb.Type(ctx, pattern).Result()
+	        if err != nil {
+	          fmt.Printf("  %s: exists, type error - %v\n", pattern, err)
+	          continue
+	        }
+	        
+	        switch keyType {
+	        case "string":
+	          value, err := rdb.Get(ctx, pattern).Result()
+	          if err != nil {
+	            fmt.Printf("  %s: type: string, value error - %v\n", pattern, err)
+	          } else {
+	            fmt.Printf("  %s: type: string, value: %s\n", pattern, value)
+	          }
+	        default:
+	          fmt.Printf("  %s: type: %s\n", pattern, keyType)
+	        }
+	      } else {
+	        fmt.Printf("  No keys found matching pattern %s\n", keyPattern)
+	      }
+	    }
+	  }
 	}
 
 	// Get task info using correct Asynq API methods

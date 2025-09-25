@@ -12,7 +12,7 @@ import (
 	"github.com/sunbankio/tronevents/pkg/monitoring"
 	"github.com/sunbankio/tronevents/pkg/publisher"
 	redisPkg "github.com/sunbankio/tronevents/pkg/redis"
-	"github.com/sunbankio/tronevents/pkg/scanner"
+
 	tronScanner "github.com/sunbankio/tronevents/pkg/scanner"
 	"github.com/sunbankio/tronevents/pkg/storage"
 	"github.com/sunbankio/tronevents/pkg/worker"
@@ -200,7 +200,7 @@ func (s *Service) runLoop(ctx context.Context) {
 		// Publish result to Redis stream (transactions from the current block) in batch
 		s.logger.Printf("DEBUG: Publishing %d transactions from block %d to Redis stream", len(transactions), returnedBlockNum)
 		// Convert slice of values to slice of pointers for batch publishing
-		transactionPointers := make([]*scanner.Transaction, len(transactions))
+		transactionPointers := make([]*tronScanner.Transaction, len(transactions))
 		for i := range transactions {
 			transactionPointers[i] = &transactions[i]
 		}

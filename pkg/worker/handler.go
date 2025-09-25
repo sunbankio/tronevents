@@ -14,25 +14,25 @@ import (
 
 // Handler processes Asynq tasks
 type Handler struct {
-	tronScanner       *scanner.Scanner
-	publisher         *publisher.EventPublisher
-	logger            *log.Logger
+	tronScanner           *scanner.Scanner
+	publisher             *publisher.EventPublisher
+	logger                *log.Logger
 	blockProcessedStorage *storage.BlockProcessedStorage
 }
 
 // NewHandler creates a new task handler
 func NewHandler(tronScanner *scanner.Scanner, publisher *publisher.EventPublisher, blockProcessedStorage *storage.BlockProcessedStorage, logger *log.Logger) *Handler {
 	return &Handler{
-		tronScanner:       tronScanner,
-		publisher:         publisher,
-		logger:            logger,
+		tronScanner:           tronScanner,
+		publisher:             publisher,
+		logger:                logger,
 		blockProcessedStorage: blockProcessedStorage,
 	}
 }
 
 // HandleTask processes a task from the queue
 func (h *Handler) HandleTask(ctx context.Context, t *asynq.Task) error {
-	h.logger.Printf("DEBUG: Worker processing task from queue")
+	// h.logger.Printf("DEBUG: Worker processing task from queue")
 
 	// Extract block number from the payload
 	var p map[string]interface{}
@@ -49,7 +49,7 @@ func (h *Handler) HandleTask(ctx context.Context, t *asynq.Task) error {
 	}
 
 	blockNumber := int64(blockNum)
-	h.logger.Printf("DEBUG: Worker processing block %d", blockNumber)
+	// h.logger.Printf("DEBUG: Worker processing block %d", blockNumber)
 
 	// Check if block has already been processed (idempotent processing)
 	alreadyProcessed, err := h.blockProcessedStorage.IsProcessed(ctx, blockNumber)
