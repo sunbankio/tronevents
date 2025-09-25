@@ -43,29 +43,30 @@ func (s *Scanner) Close() {
 	s.tronclient.Close()
 }
 
-func (s *Scanner) Scan(blockNumber int64) ([]Transaction, error) {
+func (s *Scanner) Scan(blockNumber int64) (int64, time.Time, []Transaction, error) {
 	var block *api.BlockExtention
 
 	if blockNumber > 0 {
 		var err error
 		block, err = s.getBlockByNumber(blockNumber)
 		if err != nil {
-			return nil, err
+			return 0, time.Time{}, nil, err
 		}
 	} else {
 		var err error
 		// Get the latest block
 		block, err = s.tronclient.Network().GetNowBlock(s.ctx)
 		if err != nil {
-			return nil, err
+			return 0, time.Time{}, nil, err
 		}
 		blockNumber = block.BlockHeader.RawData.Number
 	}
+	blockTime := time.Unix(0, block.BlockHeader.RawData.Timestamp*int64(time.Millisecond))
 
 	// Get transaction info - assuming it always exists for block transactions
 	txInfoList, err := s.getTransactionInfoByNumber(blockNumber)
 	if err != nil {
-		return nil, err
+		return 0, time.Time{}, nil, err
 	}
 
 	// Create a map of transaction info by transaction ID for easy lookup
@@ -92,7 +93,7 @@ func (s *Scanner) Scan(blockNumber int64) ([]Transaction, error) {
 		}
 	}
 
-	return transactions, nil
+	return blockNumber, blockTime, transactions, nil
 }
 
 func (s *Scanner) getBlockByNumber(blockNumber int64) (*api.BlockExtention, error) {

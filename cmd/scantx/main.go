@@ -23,11 +23,12 @@ func main() {
 	defer scn.Close()
 
 	// Use the implemented Scan function to get transactions
-	transactions, err := scn.Scan(blockNumber)
+	blockNumber, blockTime, transactions, err := scn.Scan(blockNumber)
 	if err != nil {
 		log.Fatalf("Failed to scan block %d: %v", blockNumber, err)
 	}
-
+	fmt.Println(blockTime.Format("2006-01-02 15:04:05"))
+	fmt.Printf(" - Block Number: %d\n", blockNumber)
 	// Print all transactions
 	for _, tx := range transactions {
 		printTransaction(tx)
