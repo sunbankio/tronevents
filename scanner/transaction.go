@@ -1,16 +1,13 @@
 package scanner
 
 import (
-	"crypto/sha256"
 	"encoding/hex"
 	"time"
 
-	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/kslamph/tronlib/pb/api"
 	"github.com/kslamph/tronlib/pb/core"
 	"github.com/kslamph/tronlib/pkg/eventdecoder"
-	"github.com/kslamph/tronlib/pkg/types"
-	"google.golang.org/protobuf/proto"
+	"github.com/kslamph/tronlib/pkg/utils"
 )
 
 // Transaction represents a parsed TRON transaction
@@ -376,48 +373,24 @@ func parseTransactionWithInfo(tx *api.TransactionExtention, txInfo *core.Transac
 	return transaction
 }
 
-// recoverSignersFromTransaction recovers all signer addresses from transaction signatures
+// recoverSignersFromTransaction recovers all signer addresses from transaction signatures using the tronlib utility
 func recoverSignersFromTransaction(tx *api.TransactionExtention) ([]string, error) {
 	if tx.Transaction == nil {
 		return nil, nil
 	}
 
-	// Get the raw transaction data that was signed
-	rawData, err := proto.Marshal(tx.Transaction.GetRawData())
+	// Use the tronlib utility function to extract signers
+	signerAddresses, err := utils.ExtractSigners(tx.Transaction)
 	if err != nil {
 		return nil, err
 	}
 
-	// Calculate the hash that was signed (SHA256 of raw data)
-	h256h := sha256.New()
-	h256h.Write(rawData)
-	hash := h256h.Sum(nil)
-
-	// Get signatures from the transaction
-	signatures := tx.Transaction.GetSignature()
-	if len(signatures) == 0 {
-		return nil, nil
-	}
-
-	signers := make([]string, 0, len(signatures))
-	for _, sig := range signatures {
-		if len(sig) < 64 {
-			continue
+	// Convert the types.Address objects to strings
+	signers := make([]string, 0, len(signerAddresses))
+	for _, addr := range signerAddresses {
+		if addr != nil {
+			signers = append(signers, addr.String())
 		}
-
-		// TRON signatures should be properly formatted for recovery
-		// Recover the public key from the signature and hash
-		pubKey, err := crypto.SigToPub(hash, sig)
-		if err != nil {
-			continue // Skip invalid signatures
-		}
-
-		// Convert public key to TRON address
-		ethAddress := crypto.PubkeyToAddress(*pubKey)
-
-		// Convert Ethereum address to TRON address format
-		tronAddr := types.MustNewAddressFromHex(ethAddress.Hex())
-		signers = append(signers, tronAddr.String())
 	}
 
 	return signers, nil
