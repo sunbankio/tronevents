@@ -44,10 +44,22 @@ func (s *Scanner) Close() {
 }
 
 func (s *Scanner) Scan(blockNumber int64) ([]Transaction, error) {
-	// Get both block data and transaction info
-	block, err := s.getBlockByNumber(blockNumber)
-	if err != nil {
-		return nil, err
+	var block *api.BlockExtention
+
+	if blockNumber > 0 {
+		var err error
+		block, err = s.getBlockByNumber(blockNumber)
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		var err error
+		// Get the latest block
+		block, err = s.tronclient.Network().GetNowBlock(s.ctx)
+		if err != nil {
+			return nil, err
+		}
+		blockNumber = block.BlockHeader.RawData.Number
 	}
 
 	// Get transaction info - assuming it always exists for block transactions

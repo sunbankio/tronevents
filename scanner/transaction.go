@@ -18,8 +18,7 @@ type Transaction struct {
 	BlockNumber    int64     `json:"block_number,omitempty"`
 	BlockTimestamp time.Time `json:"block_timestamp,omitempty"`
 	Expiration     time.Time `json:"expiration,omitempty"`
-	EnergyUsed     int64     `json:"energy_used,omitempty"`
-	BandwidthUsed  int64     `json:"bandwidth_used,omitempty"`
+	Receipt        Receipt   `json:"receipt,omitempty"`
 	Logs           []LogInfo `json:"logs,omitempty"`
 	Signers        []string  `json:"signers,omitempty"` // All signers for the transaction
 }
@@ -28,6 +27,17 @@ type Transaction struct {
 type RetInfo struct {
 	ContractRet string `json:"contractRet"`
 }
+
+// Receipt represents the receipt information of a transaction
+type Receipt struct {
+	EnergyUsage        int64 `json:"energy_usage,omitempty"`
+	EnergyFee          int64 `json:"energy_fee,omitempty"`
+	OriginEnergyUsage  int64 `json:"origin_energy_usage,omitempty"`
+	EnergyUsageTotal   int64 `json:"energy_usage_total,omitempty"`
+	NetUsage           int64 `json:"net_usage,omitempty"`
+	NetFee             int64 `json:"net_fee,omitempty"`
+}
+
 
 // LogInfo represents a decoded log event
 type LogInfo struct {
@@ -102,17 +112,14 @@ func parseTransactionWithInfo(tx *api.TransactionExtention, txInfo *core.Transac
 			transaction.BlockTimestamp = time.Unix(txInfo.BlockTimeStamp/1000, 0)
 		}
 
-		// Add energy usage info
+		// Add energy and network usage info
 		if txInfo.Receipt != nil {
-			if txInfo.Receipt.EnergyUsage > 0 {
-				transaction.EnergyUsed = txInfo.Receipt.EnergyUsage
-			}
-			// Add net usage info
-			if txInfo.Receipt.NetUsage > 0 {
-				transaction.BandwidthUsed = txInfo.Receipt.NetUsage
-			}
-			// We could also add other energy-related fields if needed:
-			// EnergyUsageTotal, OriginEnergyUsage, EnergyPenaltyTotal
+			transaction.Receipt.EnergyUsage = txInfo.Receipt.EnergyUsage
+			transaction.Receipt.EnergyFee = txInfo.Receipt.EnergyFee
+			transaction.Receipt.OriginEnergyUsage = txInfo.Receipt.OriginEnergyUsage
+			transaction.Receipt.EnergyUsageTotal = txInfo.Receipt.EnergyUsageTotal
+			transaction.Receipt.NetUsage = txInfo.Receipt.NetUsage
+			transaction.Receipt.NetFee = txInfo.Receipt.NetFee
 		}
 
 		// Add logs from TransactionInfo (these are typically more complete)

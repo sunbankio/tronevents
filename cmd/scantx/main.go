@@ -11,7 +11,7 @@ import (
 
 func main() {
 	nodeAddress := "grpc://127.0.0.1:50051"
-	blockNumber := int64(76036779)
+	blockNumber := int64(0)
 
 	fmt.Printf("Creating scanner to connect to node: %s\n", nodeAddress)
 	fmt.Printf("Scanning block number: %d\n", blockNumber)
@@ -58,14 +58,29 @@ func printTransaction(tx scanner.Transaction) {
 	// Print contract parameters dynamically using reflection
 	printContractParameters(tx.Contract.Parameter)
 
-	// Display energy used if available
-	if tx.EnergyUsed > 0 {
-		fmt.Printf("Energy Used: %d\n", tx.EnergyUsed)
-	}
-
-	// Display bandwidth used if available
-	if tx.BandwidthUsed > 0 {
-		fmt.Printf("Bandwidth Used: %d\n", tx.BandwidthUsed)
+	// Display receipt information if available
+	if tx.Receipt.EnergyUsage > 0 || tx.Receipt.EnergyFee > 0 || tx.Receipt.OriginEnergyUsage > 0 ||
+		tx.Receipt.EnergyUsageTotal > 0 || tx.Receipt.NetUsage > 0 || tx.Receipt.NetFee > 0 {
+		fmt.Printf("Receipt Information:\n")
+		if tx.Receipt.EnergyUsage > 0 {
+			fmt.Printf("  Energy Usage: %d\n", tx.Receipt.EnergyUsage)
+		}
+		if tx.Receipt.EnergyFee > 0 {
+			fmt.Printf("  Energy Fee: %d\n", tx.Receipt.EnergyFee)
+		}
+		if tx.Receipt.OriginEnergyUsage > 0 {
+			fmt.Printf("  Origin Energy Usage: %d\n", tx.Receipt.OriginEnergyUsage)
+		}
+		if tx.Receipt.EnergyUsageTotal > 0 {
+			fmt.Printf("  Energy Usage Total: %d\n", tx.Receipt.EnergyUsageTotal)
+		}
+		if tx.Receipt.NetUsage > 0 {
+			fmt.Printf("  Net Usage: %d\n", tx.Receipt.NetUsage)
+		}
+		if tx.Receipt.NetFee > 0 {
+			fmt.Printf("  Net Fee: %d\n", tx.Receipt.NetFee)
+		}
+		fmt.Println()
 	}
 
 	// Display logs if available
@@ -121,7 +136,7 @@ func printContractParameters(param interface{}) {
 	for i := 0; i < v.NumField(); i++ {
 		field := v.Field(i)
 		fieldType := t.Field(i)
-		
+
 		// Get the field name from struct tag if available, otherwise use field name
 		name := fieldType.Name
 		if jsonTag := fieldType.Tag.Get("json"); jsonTag != "" {
@@ -131,15 +146,15 @@ func printContractParameters(param interface{}) {
 				name = jsonTag
 			}
 		}
-		
+
 		// Skip fields that are meant to be omitted
 		if name == "-" {
 			continue
 		}
-		
+
 		// Format the field name nicely (convert from CamelCase to readable format)
 		formattedName := formatFieldName(name)
-		
+
 		// Print the field value based on its type
 		switch field.Kind() {
 		case reflect.String:
