@@ -1,0 +1,105 @@
+services:
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    volumes:
+      - redis_data:/data
+    command: >
+      redis-server --appendonly yes
+                 --maxmemory ${REDIS_MAXMEMORY:-512mb}
+                 --maxmemory-policy allkeys-lru
+                 --stream-node-max-bytes 4096
+                 --stream-node-max-entries 100
+                 --save 900 1 300 10 60 10000
+                 --repl-backlog-size 2mb
+                 --hz 10
+                 --latency-monitor-threshold 0
+    environment:
+      - REDIS_REPLICATION_MODE=master
+    ports:
+      - "6379:6379"
+    networks:
+      - tronevents
+    deploy:
+      resources:
+        limits:
+          memory: ${REDIS_MEMORY_LIMIT:-512M}
+        reservations:
+          memory: ${REDIS_MEMORY_RESERVATION:-256M}
+
+  tronevent-daemon:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      - redis
+    volumes:
+      - ./config.yaml:/app/config/config.yaml:ro
+      - tronevent_state:/app/state
+    environment:
+      - CONFIG_PATH=/app/config/config.yaml
+    ports:
+      - "8080:8080"  # If the daemon exposes HTTP endpoints
+    networks:
+      - tronevents
+    deploy:
+      resources:
+        limits:
+          memory: ${TRONEVENT_MEMORY_LIMIT:-512M}
+        reservations:
+          memory: ${TRONEVENT_MEMORY_RESERVATION:-256M}
+    command: >
+      sh -c "
+        # Wait for Redis to be ready
+        until redis-cli -h redis ping > /dev/null 2>&1; do
+          echo 'Waiting for Redis...'
+          sleep 2
+        done
+        # Start the daemon
+        tronevent-daemon
+      "
+
+  asynqmon:
+    image: hibiken/asynqmon
+    restart: unless-stopped
+    environment:
+      - REDIS_ADDR=redis:6379
+      - REDIS_PASSWORD=
+      - REDIS_DB=0
+      - SERVER_PORT=8080
+    ports:
+      - "8081:8080"
+    networks:
+      - tronevents
+    depends_on:
+      - redis
+
+volumes:
+  redis_data:
+    driver: local
+  tronevent_state:
+
+networks:
+  tronevents:
+    driver: bridge
+
+# Memory configuration presets for different host RAM sizes:
+#
+# For 1GB RAM hosts:
+# REDIS_MAXMEMORY=512mb
+# REDIS_MEMORY_LIMIT=640M
+# TRONEVENT_MEMORY_LIMIT=256M
+#
+# For 2GB RAM hosts:
+# REDIS_MAXMEMORY=1gb
+# REDIS_MEMORY_LIMIT=1.2G
+# TRONEVENT_MEMORY_LIMIT=512M
+#
+# For 4GB RAM hosts:
+# REDIS_MAXMEMORY=2gb
+# REDIS_MEMORY_LIMIT=2.5G
+# TRONEVENT_MEMORY_LIMIT=1G
+#
+# For 8GB RAM hosts:
+# REDIS_MAXMEMORY=4gb
+# REDIS_MEMORY_LIMIT=5G
+# TRONEVENT_MEMORY_LIMIT=2G

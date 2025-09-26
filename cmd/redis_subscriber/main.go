@@ -17,7 +17,7 @@ func main() {
 	processor := &EventProcessor{
 		redisStream:  redisStream,
 		streamName:   "tron:events",
-		groupName:    "exampleGroup1",
+		groupName:    "exampleGroupNew",
 		consumerName: "exampleConsumer1",
 		stateStore:   &FileStateStore{filename: "last_processed_id.txt"},
 	}
