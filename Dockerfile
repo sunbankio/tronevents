@@ -13,8 +13,9 @@ COPY go.mod go.sum ./
 # Download dependencies
 RUN go mod download
 
-# Copy source code
-COPY . .
+# Copy only necessary source code
+COPY cmd/daemon/ ./cmd/daemon/
+COPY pkg/ ./pkg/
 
 # Build the binary
 RUN CGO_ENABLED=0 GOOS=linux go build -o tronevent-daemon ./cmd/daemon/main.go

@@ -1,5 +1,5 @@
 redis:
-  addr: "localhost:6379"
+  addr: "redis:6379"
   password: ""
   db: 0
   prefix: "tron"
@@ -9,7 +9,7 @@ queue:
   backlog_workers: 12
 log_level: "info"
 tron:
-  node_url: "grpc://localhost:50051"
+  node_url: "grpc://envoy:50051"
   timeout: 15
   pool_size: 12
   max_pool_size: 18

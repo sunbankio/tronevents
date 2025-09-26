@@ -3,6 +3,8 @@ package daemon
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"log"
 	"time"
 
 	goRedis "github.com/go-redis/redis/v8"
@@ -47,10 +49,28 @@ func (s *Service) Logger() *logging.Logger {
 
 // NewService creates a new daemon Service.
 func NewService(cfg *config.Config) *Service {
-	// Initialize components
-	goRedisClient, err := redisPkg.NewClient(cfg.Redis)
-	if err != nil {
-		panic(err)
+	// Initialize Redis client with retry logic
+	var goRedisClient *goRedis.Client
+	var err error
+	
+	// Retry for up to 5 minutes with 10-second intervals
+	maxRetries := 30 // 30 * 10 seconds = 5 minutes
+	retryInterval := 10 * time.Second
+	
+	for i := 0; i < maxRetries; i++ {
+		goRedisClient, err = redisPkg.NewClient(cfg.Redis)
+		if err == nil {
+			break // Success, exit retry loop
+		}
+		
+		if i == maxRetries-1 {
+			// Last attempt, panic with error
+			panic(fmt.Sprintf("Failed to connect to Redis after %d attempts: %v", maxRetries, err))
+		}
+		
+		// Log retry attempt and wait
+		log.Printf("Failed to connect to Redis: %v. Retrying in %v... (Attempt %d/%d)", err, retryInterval, i+1, maxRetries)
+		time.Sleep(retryInterval)
 	}
 
 	asynqClient := asynq.NewClient(asynq.RedisClientOpt{Addr: cfg.Redis.Addr})

@@ -1,4 +1,17 @@
 services:
+  envoy:
+    image: envoyproxy/envoy:tools-dev
+    restart: unless-stopped
+    expose:
+      - "50051"
+      - "8090"
+      - "9901"
+    volumes:
+      - ./envoy.yaml:/etc/envoy/envoy.yaml:ro
+    command: /usr/local/bin/envoy -c /etc/envoy/envoy.yaml --service-cluster tron-grpc-proxy
+    networks:
+      - tronevents
+
   redis:
     image: redis:7-alpine
     restart: unless-stopped
@@ -28,10 +41,11 @@ services:
           memory: ${REDIS_MEMORY_RESERVATION:-256M}
 
   tronevent-daemon:
-    build: .
+    image: ghcr.io/sunbankio/tronevents:latest
     restart: unless-stopped
     depends_on:
       - redis
+      - envoy
     volumes:
       - ./config.yaml:/app/config/config.yaml:ro
     environment:
@@ -44,14 +58,10 @@ services:
           memory: ${TRONEVENT_MEMORY_LIMIT:-512M}
         reservations:
           memory: ${TRONEVENT_MEMORY_RESERVATION:-256M}
+    working_dir: /app/config
     command: >
       sh -c "
-        # Wait for Redis to be ready
-        until redis-cli -h redis ping > /dev/null 2>&1; do
-          echo 'Waiting for Redis...'
-          sleep 2
-        done
-        # Start the daemon
+        # Start the daemon from config directory
         tronevent-daemon
       "
 
