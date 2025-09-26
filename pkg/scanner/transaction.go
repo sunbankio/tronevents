@@ -7,13 +7,13 @@ import (
 // Transaction represents a parsed TRON transaction
 type Transaction struct {
 	ID             string    `json:"id"`
-	Contract       Contract  `json:"contract"`
-	Ret            RetInfo   `json:"ret"`
+	Contract       *Contract `json:"contract,omitempty"`
+	Ret            *RetInfo  `json:"ret,omitempty"`
 	Timestamp      time.Time `json:"timestamp"`
 	BlockNumber    int64     `json:"block_number,omitempty"`
 	BlockTimestamp time.Time `json:"block_timestamp,omitempty"`
 	Expiration     time.Time `json:"expiration,omitempty"`
-	Receipt        Receipt   `json:"receipt,omitempty"`
+	Receipt        *Receipt  `json:"receipt,omitempty"`
 	Logs           []LogInfo `json:"logs,omitempty"`
 	Signers        []string  `json:"signers,omitempty"` // All signers for the transaction
 }

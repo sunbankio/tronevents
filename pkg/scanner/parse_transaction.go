@@ -17,7 +17,7 @@ func parseTransaction(tx *api.TransactionExtention) Transaction {
 
 	// Parse return info
 	if tx.Result != nil {
-		transaction.Ret = RetInfo{
+		transaction.Ret = &RetInfo{
 			ContractRet: tx.Result.Code.String(),
 		}
 	}
@@ -34,7 +34,8 @@ func parseTransaction(tx *api.TransactionExtention) Transaction {
 		// Parse contract if exists
 		if len(tx.Transaction.RawData.Contract) > 0 {
 			contract := tx.Transaction.RawData.Contract[0]
-			transaction.Contract = parseContract(contract)
+			parsedContract := parseContract(contract)
+			transaction.Contract = &parsedContract
 		}
 	}
 
@@ -62,6 +63,9 @@ func parseTransactionWithInfo(tx *api.TransactionExtention, txInfo *core.Transac
 
 		// Add energy and network usage info
 		if txInfo.Receipt != nil {
+			if transaction.Receipt == nil {
+				transaction.Receipt = &Receipt{}
+			}
 			transaction.Receipt.EnergyUsage = txInfo.Receipt.EnergyUsage
 			transaction.Receipt.EnergyFee = txInfo.Receipt.EnergyFee
 			transaction.Receipt.OriginEnergyUsage = txInfo.Receipt.OriginEnergyUsage

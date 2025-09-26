@@ -32,16 +32,16 @@ func (t *SafeTime) UnmarshalJSON(data []byte) error {
 
 // SafeTransaction wraps scanner.Transaction with safe time handling
 type SafeTransaction struct {
-	ID             string              `json:"id"`
-	Contract       tronScanner.Contract `json:"contract"`
-	Ret            tronScanner.RetInfo `json:"ret"`
-	Timestamp      SafeTime            `json:"timestamp"`
-	BlockNumber    int64               `json:"block_number,omitempty"`
-	BlockTimestamp SafeTime            `json:"block_timestamp,omitempty"`
-	Expiration     SafeTime            `json:"expiration,omitempty"`
-	Receipt        tronScanner.Receipt `json:"receipt,omitempty"`
+	ID             string                `json:"id"`
+	Contract       *tronScanner.Contract `json:"contract,omitempty"`
+	Ret            *tronScanner.RetInfo  `json:"ret,omitempty"`
+	Timestamp      SafeTime              `json:"timestamp"`
+	BlockNumber    int64                 `json:"block_number,omitempty"`
+	BlockTimestamp SafeTime              `json:"block_timestamp,omitempty"`
+	Expiration     SafeTime              `json:"expiration,omitempty"`
+	Receipt        *tronScanner.Receipt  `json:"receipt,omitempty"`
 	Logs           []tronScanner.LogInfo `json:"logs,omitempty"`
-	Signers        []string            `json:"signers,omitempty"` // All signers for the transaction
+	Signers        []string              `json:"signers,omitempty"` // All signers for the transaction
 }
 
 // ConvertTransaction converts a scanner.Transaction to a SafeTransaction
