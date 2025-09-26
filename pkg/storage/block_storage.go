@@ -2,6 +2,7 @@ package storage
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/go-redis/redis/v8"
@@ -23,18 +24,44 @@ func NewBlockProcessedStorage(client *redis.Client, key string) *BlockProcessedS
 
 // IsProcessed checks if a block has already been processed.
 func (s *BlockProcessedStorage) IsProcessed(ctx context.Context, blockNumber int64) (bool, error) {
-	exists, err := s.client.SIsMember(ctx, s.key, blockNumber).Result()
+	count, err := s.client.ZCount(ctx, s.key, fmt.Sprintf("%d", blockNumber), fmt.Sprintf("%d", blockNumber)).Result()
 	if err != nil && err != redis.Nil {
 		return false, err
 	}
-	return exists, nil
+	return count > 0, nil
 }
 
-// MarkProcessed marks a block as processed with a 7-day expiration.
+// MarkProcessed marks a block as processed with a 7-day expiration using ZSET.
 func (s *BlockProcessedStorage) MarkProcessed(ctx context.Context, blockNumber int64) error {
-	pipe := s.client.TxPipeline()
-	pipe.SAdd(ctx, s.key, blockNumber)
-	pipe.Expire(ctx, s.key, 7*24*time.Hour) // 7 days expiration
-	_, err := pipe.Exec(ctx)
-	return err
+	timestamp := float64(time.Now().Unix())
+	return s.client.ZAdd(ctx, s.key, &redis.Z{
+		Score:  timestamp,
+		Member: blockNumber,
+	}).Err()
+}
+
+// CleanupOldEntries removes entries older than the specified duration.
+func (s *BlockProcessedStorage) CleanupOldEntries(ctx context.Context, maxAge time.Duration) error {
+	cutoffTime := float64(time.Now().Add(-maxAge).Unix())
+	return s.client.ZRemRangeByScore(ctx, s.key, "-inf", fmt.Sprintf("%f", cutoffTime)).Err()
+}
+
+// StartCleanup starts a background goroutine to periodically clean up old entries.
+func (s *BlockProcessedStorage) StartCleanup(ctx context.Context, interval time.Duration, maxAge time.Duration) {
+	go func() {
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				if err := s.CleanupOldEntries(ctx, maxAge); err != nil {
+					// In a real application, you'd want to use a proper logger
+					fmt.Printf("Error cleaning up old processed blocks: %v\n", err)
+				}
+			}
+		}
+	}()
 }

@@ -3,19 +3,22 @@ package daemon
 import (
 	"context"
 	"encoding/json"
-	"log"
 	"time"
 
 	goRedis "github.com/go-redis/redis/v8"
 	"github.com/hibiken/asynq"
 	"github.com/sunbankio/tronevents/pkg/config"
-	"github.com/sunbankio/tronevents/pkg/monitoring"
+	"github.com/sunbankio/tronevents/pkg/logging"
 	"github.com/sunbankio/tronevents/pkg/publisher"
 	redisPkg "github.com/sunbankio/tronevents/pkg/redis"
 
 	tronScanner "github.com/sunbankio/tronevents/pkg/scanner"
 	"github.com/sunbankio/tronevents/pkg/storage"
 	"github.com/sunbankio/tronevents/pkg/worker"
+)
+
+const (
+	WaitInterval = 3100 * time.Millisecond // 3100ms wait interval
 )
 
 // Service orchestrates all the components of the daemon.
@@ -28,8 +31,7 @@ type Service struct {
 	lastSyncedBlock       *storage.LastSyncedStorage
 	publisher             *publisher.EventPublisher
 	workerManager         *worker.Manager
-	monitoring            *monitoring.Metrics
-	logger                *log.Logger
+	logger                *logging.Logger
 	blockProcessedStorage *storage.BlockProcessedStorage
 }
 
@@ -39,7 +41,7 @@ func (s *Service) WorkerManager() *worker.Manager {
 }
 
 // Logger returns the logger.
-func (s *Service) Logger() *log.Logger {
+func (s *Service) Logger() *logging.Logger {
 	return s.logger
 }
 
@@ -54,24 +56,28 @@ func NewService(cfg *config.Config) *Service {
 	asynqClient := asynq.NewClient(asynq.RedisClientOpt{Addr: cfg.Redis.Addr})
 	asynqServer := asynq.NewServer(
 		asynq.RedisClientOpt{Addr: cfg.Redis.Addr},
-		worker.DefaultConfig(),
+		cfg.Queue.ToAsynqConfig(),
 	)
 
-	// Initialize TRON scanner - using the node address from config
-	nodeURL := cfg.TronNodeURL
+	// Initialize TRON scanner - using the node address and Tron settings from config
+	nodeURL := cfg.Tron.NodeURL
 	if nodeURL == "" {
 		nodeURL = "localhost:50051" // Default address
 	}
-	tronScannerInstance, err := tronScanner.NewScanner(nodeURL)
+	tronScannerInstance, err := tronScanner.NewScanner(nodeURL, cfg.Tron.Timeout, cfg.Tron.PoolSize, cfg.Tron.MaxPoolSize)
 	if err != nil {
 		panic(err)
 	}
 
-	lastSyncedBlockStorage := storage.NewRedisStorage(goRedisClient, "tron:last_synced_block")
-	blockProcessedStorage := storage.NewBlockProcessedStorage(goRedisClient, "tron:processed_blocks")
+	// Use configurable Redis prefix
+	redisPrefix := cfg.Redis.Prefix
+	if redisPrefix == "" {
+		redisPrefix = "tron" // Default prefix
+	}
+	lastSyncedBlockStorage := storage.NewRedisStorage(goRedisClient, redisPrefix+":last_synced_block")
+	blockProcessedStorage := storage.NewBlockProcessedStorage(goRedisClient, redisPrefix+":processed_blocks")
 	publisher := publisher.NewEventPublisher(goRedisClient)
-	workerManager := worker.NewManager(asynqServer, log.Default())
-	monitoring := monitoring.NewMetrics()
+	workerManager := worker.NewManager(asynqServer, logging.NewLogger(cfg.LogLevel))
 
 	return &Service{
 		config:                cfg,
@@ -82,8 +88,7 @@ func NewService(cfg *config.Config) *Service {
 		lastSyncedBlock:       lastSyncedBlockStorage,
 		publisher:             publisher,
 		workerManager:         workerManager,
-		monitoring:            monitoring,
-		logger:                log.Default(),
+		logger:                logging.NewLogger(cfg.LogLevel),
 		blockProcessedStorage: blockProcessedStorage,
 	}
 }
@@ -94,6 +99,9 @@ func (s *Service) Run() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
+	// Start cleanup process to remove entries older than 7 days, running every hour
+	s.blockProcessedStorage.StartCleanup(ctx, 1*time.Hour, 7*24*time.Hour)
+	
 	// Create and register the proper task handler for the worker
 	handler := worker.NewHandler(s.tronScanner, s.publisher, s.blockProcessedStorage, s.logger)
 	mux := asynq.NewServeMux()
@@ -110,6 +118,9 @@ func (s *Service) Run() {
 
 // RunWithContext starts the daemon service with a context for cancellation
 func (s *Service) RunWithContext(ctx context.Context) {
+	// Start cleanup process to remove entries older than 7 days, running every hour
+	s.blockProcessedStorage.StartCleanup(ctx, 1*time.Hour, 7*24*time.Hour)
+	
 	// Create and register the proper task handler for the worker
 	handler := worker.NewHandler(s.tronScanner, s.publisher, s.blockProcessedStorage, s.logger)
 	mux := asynq.NewServeMux()
@@ -151,7 +162,7 @@ func (s *Service) batchEnqueueBlocks(blockNumbers []int64, queueName string) {
 			if _, err := s.asynqClient.Enqueue(task, asynq.Queue(queueName), asynq.MaxRetry(5)); err != nil {
 				s.logger.Printf("Error enqueuing block %d: %v", blockNum, err)
 			} else {
-				s.logger.Printf("DEBUG: Successfully enqueued block %d to %s queue", blockNum, queueName)
+				s.logger.Debugf("Successfully enqueued block %d to %s queue", blockNum, queueName)
 			}
 		}
 	}
@@ -176,29 +187,27 @@ func (s *Service) runLoop(ctx context.Context) {
 			time.Sleep(1 * time.Second)
 			continue
 		}
-		s.logger.Println("=========MAINLOOP ITERATION START=========")
-		s.logger.Printf("DEBUG: Loaded last_synced_block = %d", lastSyncedBlock)
+		s.logger.Debugf("Loaded last_synced_block = %d", lastSyncedBlock)
 
 		// Use scanner.Scan(0) to get current block
-		s.logger.Printf("DEBUG: Scanning current block with Scan(ctx, 0)")
-		returnedBlockNum, _, transactions, err := s.tronScanner.Scan(ctx, 0)
+		s.logger.Debugf("Scanning current block with Scan(ctx, 0)")
+		returnedBlockNum, returnedBlockTime, transactions, err := s.tronScanner.Scan(ctx, 0)
 		if err != nil {
 			s.logger.Println("Error scanning current block: ", err)
 			time.Sleep(1 * time.Second)
 			continue
 		}
-		s.logger.Printf("DEBUG: Scan completed - returned block: %d, transactions count: %d", returnedBlockNum, len(transactions))
+		s.logger.Debugf("Scan completed - returned block: %d, transactions count: %d", returnedBlockNum, len(transactions))
 
 		// Check if lastSyncedBlock == returnedBlockNum
 		if lastSyncedBlock == returnedBlockNum {
-			s.logger.Printf("DEBUG: lastSyncedBlock (%d) == returnedBlockNum (%d), waiting 1 second", lastSyncedBlock, returnedBlockNum)
+			s.logger.Debugf("lastSyncedBlock (%d) == returnedBlockNum (%d), waiting 1 second", lastSyncedBlock, returnedBlockNum)
 			// Wait one second and continue
-			time.Sleep(1 * time.Second)
+			waitUntil(returnedBlockTime.Add(WaitInterval))
 			continue
 		}
 
 		// Publish result to Redis stream (transactions from the current block) in batch
-		s.logger.Printf("DEBUG: Publishing %d transactions from block %d to Redis stream", len(transactions), returnedBlockNum)
 		// Convert slice of values to slice of pointers for batch publishing
 		transactionPointers := make([]*tronScanner.Transaction, len(transactions))
 		for i := range transactions {
@@ -210,31 +219,37 @@ func (s *Service) runLoop(ctx context.Context) {
 
 		// Mark the current block as processed to prevent duplicate processing
 		if err := s.blockProcessedStorage.MarkProcessed(ctx, returnedBlockNum); err != nil {
-			s.logger.Printf("ERROR: Failed to mark block %d as processed: %v", returnedBlockNum, err)
+			s.logger.Errorf("[MAIN]    Failed to mark block %d as processed: %v", returnedBlockNum, err)
 		}
+
+		s.logger.Infof("[MAIN]   Block %d scanned, published %d transactions.", returnedBlockNum, len(transactions))
 
 		// Program first run, or we are in sync, no backlog
 		// if last synced block not exists or zero or returned block number = last_synced_block+1
 		if lastSyncedBlock == 0 || returnedBlockNum == lastSyncedBlock+1 {
-			s.logger.Printf("DEBUG: First run or in sync - lastSyncedBlock: %d, returnedBlockNum: %d", lastSyncedBlock, returnedBlockNum)
+			s.logger.Debugf("First run or in sync - lastSyncedBlock: %d, returnedBlockNum: %d", lastSyncedBlock, returnedBlockNum)
 			// Update last synced_block
 			if err := s.lastSyncedBlock.Save(ctx, returnedBlockNum); err != nil {
 				s.logger.Printf("Error saving last synced block: %v", err)
 			}
 
-			s.logger.Printf("DEBUG: Updated last synced block to %d", returnedBlockNum)
-			// Wait 3 seconds and continue
-			time.Sleep(3 * time.Second)
+			s.logger.Debugf("Updated last synced block to %d", returnedBlockNum)
+			waitUntil(returnedBlockTime.Add(WaitInterval))
+
 			continue
 		}
 
 		// Slight backlog: we are lagging, but at most 20 blocks
 		// blocks from last_synced+1 to returned_block-1 (inclusive) are missing
 		if returnedBlockNum <= lastSyncedBlock+20 {
-			s.logger.Printf("DEBUG: Slight backlog detected - lastSynced: %d, returned: %d, gap: %d blocks", lastSyncedBlock, returnedBlockNum, returnedBlockNum-lastSyncedBlock-1)
+			s.logger.Debugf("Slight backlog detected - lastSynced: %d, returned: %d, gap: %d blocks", lastSyncedBlock, returnedBlockNum, returnedBlockNum-lastSyncedBlock-1)
 
 			// Batch enqueue blocks to reduce Redis operations
-			blockNumbers := make([]int64, 0, returnedBlockNum-lastSyncedBlock-1)
+			gap := returnedBlockNum - lastSyncedBlock - 1
+			if gap <= 0 {
+				gap = 0
+			}
+			blockNumbers := make([]int64, 0, gap)
 			for blockNum := lastSyncedBlock + 1; blockNum < returnedBlockNum; blockNum++ {
 				blockNumbers = append(blockNumbers, blockNum)
 			}
@@ -246,16 +261,16 @@ func (s *Service) runLoop(ctx context.Context) {
 				s.logger.Printf("Error saving last synced block: %v", err)
 			}
 
-			s.logger.Printf("DEBUG: Updated last synced block to %d after slight backlog processing", returnedBlockNum)
-			// Wait 3 seconds and continue
-			time.Sleep(3 * time.Second)
+			s.logger.Debugf("Updated last synced block to %d after slight backlog processing", returnedBlockNum)
+			// Wait for the defined interval and continue
+			waitUntil(returnedBlockTime.Add(WaitInterval))
 			continue
 		}
 
 		// Large backlog: we are lagging more than 20 blocks
 		// last_synced+1 to returned_block-1 are all missing
 		// however, we will backlog at most 7 days backlog (201600 blocks)
-		s.logger.Printf("DEBUG: Large backlog detected - lastSynced: %d, returned: %d, gap: %d blocks", lastSyncedBlock, returnedBlockNum, returnedBlockNum-lastSyncedBlock-1)
+		s.logger.Debugf("Large backlog detected - lastSynced: %d, returned: %d, gap: %d blocks", lastSyncedBlock, returnedBlockNum, returnedBlockNum-lastSyncedBlock-1)
 
 		// push the gapped blocks' block number range from max(returned_block-201600, last_synced+1) to returned_block-1, into backlog queue
 		startBlock := lastSyncedBlock + 1
@@ -264,10 +279,14 @@ func (s *Service) runLoop(ctx context.Context) {
 			startBlock = maxStartBlock
 		}
 
-		s.logger.Printf("DEBUG: Large backlog - queuing range: %d to %d", startBlock, returnedBlockNum-1)
+		s.logger.Debugf("Large backlog - queuing range: %d to %d", startBlock, returnedBlockNum-1)
 
 		// Batch enqueue blocks to reduce Redis operations
-		blockNumbers := make([]int64, 0, returnedBlockNum-startBlock)
+		gap := returnedBlockNum - startBlock
+		if gap <= 0 {
+			gap = 0
+		}
+		blockNumbers := make([]int64, 0, gap)
 		for blockNum := startBlock; blockNum < returnedBlockNum; blockNum++ {
 			blockNumbers = append(blockNumbers, blockNum)
 		}
@@ -279,7 +298,17 @@ func (s *Service) runLoop(ctx context.Context) {
 			s.logger.Printf("Error saving last synced block: %v", err)
 		}
 
-		s.logger.Printf("DEBUG: Updated last synced block to %d after large backlog processing", returnedBlockNum)
+		s.logger.Debugf("Updated last synced block to %d after large backlog processing", returnedBlockNum)
 		// Continue (no wait in large backlog case)
+	}
+}
+
+func waitUntil(until time.Time) {
+	for {
+		now := time.Now()
+		if now.After(until) || now.Equal(until) {
+			return
+		}
+		time.Sleep(100 * time.Millisecond) // Sleep a short duration to avoid busy waiting
 	}
 }

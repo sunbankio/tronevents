@@ -11,23 +11,15 @@ import (
 	"github.com/kslamph/tronlib/pkg/client"
 )
 
-const (
-	DefaultTimeout     = 10 // seconds
-	DefaultPoolSize    = 5
-	DefaultMaxPoolSize = 10
-)
-
 type Scanner struct {
 	tronclient *client.Client
 }
 
-// Default values
-
-func NewScanner(nodeAddress string) (*Scanner, error) {
-	// Create the client with the original NewClient function
+func NewScanner(nodeAddress string, timeout int, poolSize int, maxPoolSize int) (*Scanner, error) {
+	// Create the client with configurable timeout and pool settings
 	tronclient, err := client.NewClient(nodeAddress,
-		client.WithTimeout(time.Duration(DefaultTimeout)*time.Second),
-		client.WithPool(DefaultPoolSize, DefaultMaxPoolSize),
+		client.WithTimeout(time.Duration(timeout)*time.Second),
+		client.WithPool(poolSize, maxPoolSize),
 	)
 	if err != nil {
 		return nil, err

@@ -17,7 +17,7 @@ func main() {
 	fmt.Printf("Creating scanner to connect to node: %s\n", nodeAddress)
 	fmt.Printf("Scanning block number: %d\n", blockNumber)
 
-	scn, err := scanner.NewScanner(nodeAddress)
+	scn, err := scanner.NewScanner(nodeAddress, 10, 5, 15)
 	if err != nil {
 		log.Fatalf("Failed to create scanner: %v", err)
 	}

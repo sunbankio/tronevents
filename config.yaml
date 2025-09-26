@@ -2,10 +2,14 @@ redis:
   addr: "localhost:6379"
   password: ""
   db: 0
+  prefix: "tron"
 queue:
   max_workers: 15
-  new_block_workers: 1
-  priority_workers: 1
-  backlog_workers: 13
-tron_node_url: "grpc://localhost:50051"
+  priority_workers: 2
+  backlog_workers: 12
 log_level: "info"
+tron:
+  node_url: "grpc://localhost:50051"
+  timeout: 15
+  pool_size: 12
+  max_pool_size: 18

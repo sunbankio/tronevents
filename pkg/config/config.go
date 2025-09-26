@@ -8,12 +8,20 @@ import (
 	"gopkg.in/yaml.v2"
 )
 
+// TronConfig holds the configuration for the Tron client.
+type TronConfig struct {
+	NodeURL     string `yaml:"node_url"`
+	Timeout     int    `yaml:"timeout"`
+	PoolSize    int    `yaml:"pool_size"`
+	MaxPoolSize int    `yaml:"max_pool_size"`
+}
+
 // Config holds the configuration for the entire daemon.
 type Config struct {
-	Redis       redis.Config `yaml:"redis"`
-	Queue       queue.Config `yaml:"queue"`
-	TronNodeURL string       `yaml:"tron_node_url"`
-	LogLevel    string       `yaml:"log_level"`
+	Redis    redis.Config `yaml:"redis"`
+	Queue    queue.Config `yaml:"queue"`
+	Tron     TronConfig   `yaml:"tron"`
+	LogLevel string       `yaml:"log_level"`
 }
 
 // LoadFromFile loads the configuration from a YAML file.
