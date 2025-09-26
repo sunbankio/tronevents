@@ -3,7 +3,6 @@ package worker
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 
 	"github.com/hibiken/asynq"
 	"github.com/sunbankio/tronevents/pkg/logging"
@@ -35,20 +34,13 @@ func (h *Handler) HandleTask(ctx context.Context, t *asynq.Task) error {
 	// h.logger.Printf("DEBUG: Worker processing task from queue")
 
 	// Extract block number from the payload
-	var p map[string]interface{}
+	var p BlockProcessPayload
 	if err := json.Unmarshal(t.Payload(), &p); err != nil {
 		h.logger.Errorf("Failed to unmarshal task payload: %v", err)
 		return err
 	}
 
-	blockNum, ok := p["block_number"].(float64) // JSON numbers are float64
-	if !ok {
-		err := fmt.Errorf("block_number not found in task payload: %v", p)
-		h.logger.Errorf("%v", err)
-		return err
-	}
-
-	blockNumber := int64(blockNum)
+	blockNumber := p.BlockNumber
 	// h.logger.Printf("DEBUG: Worker processing block %d", blockNumber)
 
 	// Check if block has already been processed (idempotent processing)
@@ -64,7 +56,7 @@ func (h *Handler) HandleTask(ctx context.Context, t *asynq.Task) error {
 	}
 
 	// Get transactions for this specific block
-	transactions, err := h.tronScanner.GetTransactionsByBlock(blockNumber)
+	_, _, transactions, err := h.tronScanner.Scan(ctx, blockNumber)
 	if err != nil {
 		h.logger.Errorf("Failed to get transactions for block %d: %v", blockNumber, err)
 		return err

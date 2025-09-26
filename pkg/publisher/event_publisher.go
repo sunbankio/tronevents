@@ -12,7 +12,7 @@ import (
 
 const (
 	streamName = "tron:events"
-	sevenDays  = 7 * 24 * time.Hour
+	sevenDays  = 201600 // 7 days * 24 hours * 60 mins * 60 secs / 3 secs per block
 )
 
 // EventPublisher is responsible for publishing events to a Redis stream.
@@ -42,7 +42,7 @@ func (p *EventPublisher) Publish(ctx context.Context, tx *scanner.Transaction) e
 
 	return p.client.XAdd(ctx, &redis.XAddArgs{
 		Stream:       streamName,
-		MaxLenApprox: 201600, // 7 days * 24 hours * 60 mins * 60 secs / 3 secs per block
+		MaxLenApprox: sevenDays,
 		Values:       map[string]interface{}{"payload": payload},
 	}).Err()
 }
@@ -65,7 +65,7 @@ func (p *EventPublisher) PublishBatch(ctx context.Context, txs []*scanner.Transa
 
 		pipe.XAdd(ctx, &redis.XAddArgs{
 			Stream:       streamName,
-			MaxLenApprox: 201600, // 7 days * 24 hours * 60 mins * 60 secs / 3 secs per block
+			MaxLenApprox: sevenDays,
 			Values:       map[string]interface{}{"payload": payload},
 		})
 	}

@@ -1,7 +1,7 @@
 package config
 
 import (
-	"io/ioutil"
+	"os"
 
 	"github.com/sunbankio/tronevents/pkg/queue"
 	"github.com/sunbankio/tronevents/pkg/redis"
@@ -26,7 +26,7 @@ type Config struct {
 
 // LoadFromFile loads the configuration from a YAML file.
 func LoadFromFile(path string) (*Config, error) {
-	data, err := ioutil.ReadFile(path)
+	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
 	}

@@ -74,7 +74,7 @@ func NewService(cfg *config.Config) *Service {
 	if redisPrefix == "" {
 		redisPrefix = "tron" // Default prefix
 	}
-	lastSyncedBlockStorage := storage.NewRedisStorage(goRedisClient, redisPrefix+":last_synced_block")
+	lastSyncedBlockStorage := storage.NewLastSyncedStorage(goRedisClient, redisPrefix+":last_synced_block")
 	blockProcessedStorage := storage.NewBlockProcessedStorage(goRedisClient, redisPrefix+":processed_blocks")
 	publisher := publisher.NewEventPublisher(goRedisClient)
 	workerManager := worker.NewManager(asynqServer, logging.NewLogger(cfg.LogLevel))
@@ -93,34 +93,11 @@ func NewService(cfg *config.Config) *Service {
 	}
 }
 
-// Run starts the daemon service.
-func (s *Service) Run() {
-	// Create a background context
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	// Start cleanup process to remove entries older than 7 days, running every hour
-	s.blockProcessedStorage.StartCleanup(ctx, 1*time.Hour, 7*24*time.Hour)
-	
-	// Create and register the proper task handler for the worker
-	handler := worker.NewHandler(s.tronScanner, s.publisher, s.blockProcessedStorage, s.logger)
-	mux := asynq.NewServeMux()
-	worker.RegisterHandlers(mux, handler)
-
-	// Start the worker manager with the proper handler
-	if err := s.workerManager.StartWithMux(mux); err != nil {
-		s.logger.Fatal("Failed to start worker manager: ", err)
-	}
-
-	// Main processing loop
-	s.runLoop(ctx)
-}
-
 // RunWithContext starts the daemon service with a context for cancellation
 func (s *Service) RunWithContext(ctx context.Context) {
 	// Start cleanup process to remove entries older than 7 days, running every hour
 	s.blockProcessedStorage.StartCleanup(ctx, 1*time.Hour, 7*24*time.Hour)
-	
+
 	// Create and register the proper task handler for the worker
 	handler := worker.NewHandler(s.tronScanner, s.publisher, s.blockProcessedStorage, s.logger)
 	mux := asynq.NewServeMux()
@@ -153,7 +130,7 @@ func (s *Service) batchEnqueueBlocks(blockNumbers []int64, queueName string) {
 
 		// Create all tasks first, then enqueue them using Asynq's client
 		for _, blockNum := range batch {
-			payload, err := json.Marshal(map[string]interface{}{"block_number": blockNum})
+			payload, err := json.Marshal(worker.BlockProcessPayload{BlockNumber: blockNum})
 			if err != nil {
 				s.logger.Printf("Error marshaling payload for block %d: %v", blockNum, err)
 				continue
@@ -228,14 +205,8 @@ func (s *Service) runLoop(ctx context.Context) {
 		// if last synced block not exists or zero or returned block number = last_synced_block+1
 		if lastSyncedBlock == 0 || returnedBlockNum == lastSyncedBlock+1 {
 			s.logger.Debugf("First run or in sync - lastSyncedBlock: %d, returnedBlockNum: %d", lastSyncedBlock, returnedBlockNum)
-			// Update last synced_block
-			if err := s.lastSyncedBlock.Save(ctx, returnedBlockNum); err != nil {
-				s.logger.Printf("Error saving last synced block: %v", err)
-			}
-
-			s.logger.Debugf("Updated last synced block to %d", returnedBlockNum)
+			s.updateLastSyncedBlock(ctx, returnedBlockNum)
 			waitUntil(returnedBlockTime.Add(WaitInterval))
-
 			continue
 		}
 
@@ -255,14 +226,7 @@ func (s *Service) runLoop(ctx context.Context) {
 			}
 
 			s.batchEnqueueBlocks(blockNumbers, "priority")
-
-			// Update last synced_block
-			if err := s.lastSyncedBlock.Save(ctx, returnedBlockNum); err != nil {
-				s.logger.Printf("Error saving last synced block: %v", err)
-			}
-
-			s.logger.Debugf("Updated last synced block to %d after slight backlog processing", returnedBlockNum)
-			// Wait for the defined interval and continue
+			s.updateLastSyncedBlock(ctx, returnedBlockNum)
 			waitUntil(returnedBlockTime.Add(WaitInterval))
 			continue
 		}
@@ -292,23 +256,22 @@ func (s *Service) runLoop(ctx context.Context) {
 		}
 
 		s.batchEnqueueBlocks(blockNumbers, "backlog")
-
-		// Update last synced_block
-		if err := s.lastSyncedBlock.Save(ctx, returnedBlockNum); err != nil {
-			s.logger.Printf("Error saving last synced block: %v", err)
-		}
-
-		s.logger.Debugf("Updated last synced block to %d after large backlog processing", returnedBlockNum)
-		// Continue (no wait in large backlog case)
+		s.updateLastSyncedBlock(ctx, returnedBlockNum)
+		waitUntil(returnedBlockTime.Add(WaitInterval))
 	}
 }
 
-func waitUntil(until time.Time) {
-	for {
-		now := time.Now()
-		if now.After(until) || now.Equal(until) {
-			return
-		}
-		time.Sleep(100 * time.Millisecond) // Sleep a short duration to avoid busy waiting
+func (s *Service) updateLastSyncedBlock(ctx context.Context, blockNumber int64) {
+	if err := s.lastSyncedBlock.Save(ctx, blockNumber); err != nil {
+		s.logger.Printf("Error saving last synced block: %v", err)
 	}
+	s.logger.Debugf("Updated last synced block to %d", blockNumber)
+}
+
+func waitUntil(until time.Time) {
+	now := time.Now()
+	if now.After(until) {
+		return
+	}
+	time.Sleep(until.Sub(now))
 }

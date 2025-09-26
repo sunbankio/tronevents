@@ -14,8 +14,8 @@ type LastSyncedStorage struct {
 	key    string
 }
 
-// NewRedisStorage creates a new RedisStorage.
-func NewRedisStorage(client *redis.Client, key string) *LastSyncedStorage {
+// NewLastSyncedStorage creates a new LastSyncedStorage.
+func NewLastSyncedStorage(client *redis.Client, key string) *LastSyncedStorage {
 	return &LastSyncedStorage{
 		client: client,
 		key:    key,
@@ -45,7 +45,3 @@ func (s *LastSyncedStorage) Load(ctx context.Context) (int64, error) {
 	return blockNumber, nil
 }
 
-// Delete removes the block number key from Redis.
-func (s *LastSyncedStorage) Delete(ctx context.Context) error {
-	return s.client.Del(ctx, s.key).Err()
-}

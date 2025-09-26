@@ -125,10 +125,10 @@ func checkQueuesForBlock(rdb *redis.Client, ctx context.Context, blockNumber int
 				// Check for the block number in various possible formats
 				// Asynq task format may have different internal structures
 				searchPatterns := []string{
-					fmt.Sprintf("\"block_number\":%d", blockNumber),      // exact JSON number
-					fmt.Sprintf("\"block_number\": %d", blockNumber),     // JSON with space
-					fmt.Sprintf("block_number:%d", blockNumber),          // without quotes
-					fmt.Sprintf("%d", blockNumber),                       // just the number
+					fmt.Sprintf("\"block_number\":%d", blockNumber),  // exact JSON number
+					fmt.Sprintf("\"block_number\": %d", blockNumber), // JSON with space
+					fmt.Sprintf("block_number:%d", blockNumber),      // without quotes
+					fmt.Sprintf("%d", blockNumber),                   // just the number
 				}
 
 				for _, pattern := range searchPatterns {
@@ -268,11 +268,4 @@ func checkQueuesForBlock(rdb *redis.Client, ctx context.Context, blockNumber int
 			}
 		}
 	}
-}
-
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
 }

@@ -109,8 +109,3 @@ func (s *Scanner) getTransactionInfoByNumber(ctx context.Context, blockNumber in
 	return s.tronclient.Network().GetTransactionInfoByBlockNum(ctx, blockNumber)
 }
 
-// GetTransactionsByBlock returns transactions for a given block number
-func (s *Scanner) GetTransactionsByBlock(blockNum int64) ([]Transaction, error) {
-	_, _, transactions, err := s.Scan(context.Background(), blockNum)
-	return transactions, err
-}

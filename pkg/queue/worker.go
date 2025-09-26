@@ -2,8 +2,6 @@ package queue
 
 import (
 	"time"
-
-	"github.com/hibiken/asynq"
 )
 
 const (
@@ -16,11 +14,6 @@ const (
 	// QueueDead is the name of the dead-letter queue.
 	QueueDead = "dead"
 )
-
-// NewServer creates a new Asynq server.
-func NewServer(redisOpt asynq.RedisClientOpt, config asynq.Config) *asynq.Server {
-	return asynq.NewServer(redisOpt, config)
-}
 
 // RetryDurations are the backoff times for retrying failed tasks.
 var RetryDurations = []time.Duration{
