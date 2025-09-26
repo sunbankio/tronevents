@@ -2,316 +2,203 @@ package main
 
 import (
 	"context"
-	"encoding/json"
-	"flag"
 	"fmt"
 	"log"
 	"os"
-	"os/signal"
-	"syscall"
+	"strings"
 	"time"
 
 	"github.com/go-redis/redis/v8"
-	troneventsredis "github.com/sunbankio/tronevents/pkg/redis"
 )
-
-const (
-	streamName = "tron:events"
-	checkpointFile = "last_processed_id.txt"
-)
-
-var groupName string
-
-var resumeFlag = flag.Bool("resume", false, "Resume from last processed transaction ID stored in checkpoint file")
-
-// SafeTransaction mirrors the structure used by the publisher
-type SafeTransaction struct {
-	ID             string    `json:"id"`
-	Contract       Contract  `json:"contract"`
-	Timestamp      SafeTime  `json:"timestamp"`
-	BlockNumber    int64     `json:"block_number,omitempty"`
-	BlockTimestamp SafeTime  `json:"block_timestamp,omitempty"`
-}
-
-type Contract struct {
-	Type         string      `json:"type"`
-	Parameter    interface{} `json:"parameter"`
-	PermissionID int         `json:"permission_id"`
-}
-
-type SafeTime struct {
-	time.Time
-}
-
-// UnmarshalJSON implements custom unmarshaling for SafeTime
-func (st *SafeTime) UnmarshalJSON(data []byte) error {
-	var timestamp string
-	if err := json.Unmarshal(data, &timestamp); err != nil {
-		return err
-	}
-
-	parsedTime, err := time.Parse(time.RFC3339, timestamp)
-	if err != nil {
-		// Try Unix timestamp format
-		var unixTime int64
-		if err := json.Unmarshal(data, &unixTime); err != nil {
-			return err
-		}
-		parsedTime = time.Unix(unixTime, 0)
-	}
-
-	st.Time = parsedTime
-	return nil
-}
-
-// CheckpointData holds the checkpoint information including group name
-type CheckpointData struct {
-	Group string `json:"group"`
-	ID    string `json:"id"`
-}
 
 func main() {
-	flag.Parse()
+	redisStream := NewRedisStream("localhost:6379", "")
 
-	// Determine the group name based on resume flag and checkpoint
-	if *resumeFlag {
-		// When explicitly resuming, read the checkpoint to get the group name
-		checkpoint, err := readCheckpoint()
-		if err == nil && checkpoint.Group != "" {
-			// Use the group name from the checkpoint
-			groupName = checkpoint.Group
-		} else {
-			// Fallback: generate a new unique group name based on PID
-			groupName = fmt.Sprintf("example-consumer-group-pid%d", os.Getpid())
-		}
-	} else {
-		// For non-resume, generate a new unique group name
-		startTime := time.Now().Unix()
-		groupName = fmt.Sprintf("example-consumer-group-%d-%d", startTime, os.Getpid())
+	processor := &EventProcessor{
+		redisStream:  redisStream,
+		streamName:   "tron:events",
+		groupName:    "exampleGroup1",
+		consumerName: "exampleConsumer1",
+		stateStore:   &FileStateStore{filename: "last_processed_id.txt"},
 	}
 
-	// Load Redis configuration (use default values, or from environment variables)
-	cfg := troneventsredis.Config{
-		Addr:     getEnv("REDIS_ADDR", "localhost:6379"),
-		Password: getEnv("REDIS_PASSWORD", ""),
-		DB:       0,
-	}
-
-	// Create Redis client
-	client := redis.NewClient(&redis.Options{
-		Addr:     cfg.Addr,
-		Password: cfg.Password,
-		DB:       cfg.DB,
-	})
-
-	// Test the connection
-	_, err := client.Ping(context.Background()).Result()
-	if err != nil {
-		log.Fatalf("Failed to connect to Redis: %v", err)
-	}
-	defer client.Close()
-
-	fmt.Printf("Connected to Redis. Using consumer group: %s. Subscribing to stream: %s\n", groupName, streamName)
-
-	// Create consumer group if it doesn't exist
-	err = client.XGroupCreateMkStream(context.Background(), streamName, groupName, "0").Err()
-	if err != nil && err.Error() != "BUSYGROUP Consumer Group name already exists" {
-		log.Printf("Warning: Failed to create consumer group: %v", err)
-	}
-
-	// Determine starting ID based on resume flag
-	var startID string
-	if *resumeFlag {
-		if checkpoint, err := readCheckpoint(); err == nil && checkpoint.ID != "" {
-			startID = checkpoint.ID
-			fmt.Printf("Resuming from ID: %s\n", startID)
-		} else {
-			startID = ">"
-			fmt.Println("Resume flag set but no checkpoint found, starting from latest messages")
-		}
-	} else {
-		startID = ">"  // Always use ">" when not resuming to get only new messages
-		fmt.Println("Starting from latest messages (use -resume to start from last processed)")
-	}
-
-	// Create context with cancellation
+	// Start processing
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// If not resuming, clear any pending messages for this consumer to start fresh
-	if !*resumeFlag {
-		clearPendingMessages(ctx, client)
+	if err := processor.ProcessEvents(ctx); err != nil {
+		log.Fatal(err)
 	}
-
-	// Handle graceful shutdown
-	sigChan := make(chan os.Signal, 1)
-	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
-	go func() {
-		<-sigChan
-		fmt.Println("\nReceived shutdown signal. Closing...")
-		cancel()
-	}()
-
-	// Subscribe to Redis stream
-	go subscribeToStream(ctx, client, startID)
-
-	// Wait for context cancellation
-	<-ctx.Done()
-	fmt.Println("Subscriber stopped.")
 }
 
-func subscribeToStream(ctx context.Context, client *redis.Client, startID string) {
-	fmt.Printf("Starting to subscribe to Redis stream with start ID: %s...\n", startID)
+type EventProcessor struct {
+	redisStream  *RedisStream
+	streamName   string
+	groupName    string
+	consumerName string
+	stateStore   *FileStateStore // File-based state store
+}
 
-	// Initialize the IDs array with the starting ID for the stream
-	streamIDs := []string{startID}
+// File-based state store that matches the README description
+type FileStateStore struct {
+	filename string
+}
+
+func (s *FileStateStore) SaveLastProcessedID(consumerGroup, consumerName, lastID string) error {
+	content := fmt.Sprintf("%s:%s:%s", consumerGroup, consumerName, lastID)
+	return os.WriteFile(s.filename, []byte(content), 0644)
+}
+
+func (s *FileStateStore) GetLastProcessedID(consumerGroup, consumerName string) (string, error) {
+	content, err := os.ReadFile(s.filename)
+	if err != nil {
+		return "", err
+	}
+	
+	parts := strings.Split(string(content), ":")
+	if len(parts) != 3 {
+		return "", fmt.Errorf("invalid checkpoint format")
+	}
+	
+	storedGroup := parts[0]
+	storedConsumer := parts[1]
+	lastID := parts[2]
+	
+	if storedGroup != consumerGroup || storedConsumer != consumerName {
+		return "", fmt.Errorf("checkpoint does not match current consumer group")
+	}
+	
+	return lastID, nil
+}
+
+func (ep *EventProcessor) ProcessEvents(ctx context.Context) error {
+	// Get last processed ID
+	lastID, err := ep.stateStore.GetLastProcessedID(ep.groupName, ep.consumerName)
+	if err != nil {
+		lastID = "0-0" // Start from beginning if no state found
+	}
+
+	// Subscribe to stream
+	streamCh, err := ep.redisStream.SubscribeWithResume(ep.streamName, ep.groupName, ep.consumerName, lastID)
+	if err != nil {
+		return err
+	}
 
 	for {
 		select {
 		case <-ctx.Done():
-			return
-		default:
-			// For go-redis v8, the stream and ID are provided as alternating entries in the Streams slice
-			// Format: [streamName, streamID]
-			streamResults, err := client.XReadGroup(ctx, &redis.XReadGroupArgs{
+			return nil
+		case stream, ok := <-streamCh:
+			if !ok {
+				return nil
+			}
+
+			for _, msg := range stream.Messages {
+				// Process the message
+				if err := ep.processMessage(msg); err != nil {
+					log.Printf("Error processing message %s: %v", msg.ID, err)
+					continue
+				}
+
+				// Acknowledge the message
+				ep.redisStream.client.XAck(ep.redisStream.ctx, ep.streamName, ep.groupName, msg.ID)
+
+				// Save the last processed ID
+				ep.stateStore.SaveLastProcessedID(ep.groupName, ep.consumerName, msg.ID)
+			}
+		}
+	}
+}
+
+func (ep *EventProcessor) processMessage(msg redis.XMessage) error {
+	// Your message processing logic here
+	fmt.Printf("Processing message ID: %s, Values: %v\n", msg.ID, msg.Values)
+	return nil
+}
+
+type RedisStream struct {
+	client *redis.Client
+	ctx    context.Context
+}
+
+func NewRedisStream(addr, password string) *RedisStream {
+	rdb := redis.NewClient(&redis.Options{
+		Addr:     addr,
+		Password: password,
+		DB:       0,
+	})
+
+	return &RedisStream{
+		client: rdb,
+		ctx:    context.Background(),
+	}
+}
+
+// Create consumer group
+func (rs *RedisStream) CreateConsumerGroup(streamName, groupName string) error {
+	return rs.client.XGroupCreateMkStream(rs.ctx, streamName, groupName, "$").Err()
+}
+
+// Subscribe with resume capability
+func (rs *RedisStream) SubscribeWithResume(streamName, groupName, consumerName string,
+	lastProcessedID string) (<-chan *redis.XStream, error) {
+
+	// Create consumer group if it doesn't exist
+	err := rs.CreateConsumerGroup(streamName, groupName)
+	if err != nil && err.Error() != "BUSYGROUP Consumer Group name already exists" {
+		return nil, err
+	}
+
+	ch := make(chan *redis.XStream)
+
+	go func() {
+		defer close(ch)
+
+		// Start position
+		startID := lastProcessedID
+		if startID == "" {
+			startID = "0-0" // Start from beginning
+		}
+
+		for {
+			// Read pending messages first (for resume capability)
+			if startID != ">" {
+				pendingMsgs, err := rs.client.XReadGroup(rs.ctx, &redis.XReadGroupArgs{
+					Group:    groupName,
+					Consumer: consumerName,
+					Streams:  []string{streamName, startID},
+					Count:    100,
+					Block:    0, // No blocking for pending messages
+				}).Result()
+
+				if err == nil && len(pendingMsgs) > 0 {
+					ch <- &pendingMsgs[0]
+					startID = ">" // Switch to new messages after processing pending
+					continue
+				}
+			}
+
+			// Read new messages
+			streams, err := rs.client.XReadGroup(rs.ctx, &redis.XReadGroupArgs{
 				Group:    groupName,
-				Consumer: "example-consumer",
-				Streams:  []string{streamName, streamIDs[0]}, // Format: [streamName, streamID]
-				Count:    10, // Read up to 10 messages at a time
-				Block:    0,  // Block indefinitely until messages are available
+				Consumer: consumerName,
+				Streams:  []string{streamName, ">"},
+				Count:    100,
+				Block:    5 * time.Second, // Block for 5 seconds
 			}).Result()
 
 			if err != nil {
-				if err == context.Canceled {
-					fmt.Println("Context canceled, exiting subscriber...")
-					return
+				if err != redis.Nil {
+					log.Printf("Error reading from stream: %v", err)
 				}
-				log.Printf("Error reading from stream: %v", err)
-				time.Sleep(1 * time.Second)
 				continue
 			}
 
-			// Process messages
-			for _, stream := range streamResults {
-				for _, msg := range stream.Messages {
-					// Get the payload from the message
-					payload, ok := msg.Values["payload"].(string)
-					if !ok {
-						log.Printf("Invalid payload format in message ID: %s", msg.ID)
-						continue
-					}
-
-					// Parse the transaction from JSON payload
-					var safeTx SafeTransaction
-					if err := json.Unmarshal([]byte(payload), &safeTx); err != nil {
-						log.Printf("Error parsing transaction: %v", err)
-						continue
-					}
-
-					// Print the required fields: txid, block#, transaction timestamp, contract type
-					fmt.Printf("TXID: %s, Block#: %d, TransactionTimestamp: %s, ContractType: %s\n",
-						safeTx.ID,
-						safeTx.BlockNumber,
-						safeTx.Timestamp.Format("2006-01-02 15:04:05"),
-						safeTx.Contract.Type,
-					)
-
-					// Acknowledge the message so it's not delivered again
-					client.XAck(ctx, streamName, groupName, msg.ID)
-
-					// Update checkpoint file with the current group name and message ID
-					if err := writeCheckpoint(groupName, msg.ID); err != nil {
-						log.Printf("Error writing checkpoint: %v", err)
-					}
-				}
+			if len(streams) > 0 {
+				ch <- &streams[0]
 			}
 		}
-	}
-}
+	}()
 
-// readCheckpoint reads the checkpoint data (group name and last processed ID) from the checkpoint file
-func readCheckpoint() (CheckpointData, error) {
-	var checkpoint CheckpointData
-
-	data, err := os.ReadFile(checkpointFile)
-	if err != nil {
-		return checkpoint, err
-	}
-
-	err = json.Unmarshal(data, &checkpoint)
-	if err != nil {
-		// For backward compatibility, if it's not JSON, treat it as just the ID
-		// and return with an empty group name
-		return CheckpointData{
-			Group: "",
-			ID:    string(data),
-		}, nil
-	}
-
-	return checkpoint, nil
-}
-
-// writeCheckpoint writes the current group name and ID to the checkpoint file
-func writeCheckpoint(groupName, id string) error {
-	checkpoint := CheckpointData{
-		Group: groupName,
-		ID:    id,
-	}
-
-	data, err := json.Marshal(checkpoint)
-	if err != nil {
-		return err
-	}
-
-	return os.WriteFile(checkpointFile, data, 0644)
-}
-
-// clearPendingMessages reads and acknowledges any pending messages for this consumer
-// This ensures that when not resuming, we start processing only new messages
-func clearPendingMessages(ctx context.Context, client *redis.Client) {
-	fmt.Println("Clearing any pending messages to start fresh...")
-
-	// Get detailed info for all pending messages in the consumer group
-	pendingExtResult, err := client.XPendingExt(ctx, &redis.XPendingExtArgs{
-		Stream: streamName,
-		Group:  groupName,
-		Start:  "-",
-		End:    "+",
-		Count:  1000, // Get up to 1000 pending messages
-	}).Result()
-
-	if err != nil {
-		// If the group has no pending messages, this might return an error, which is fine
-		if err.Error() != "NOGROUP No such key 'tron:events' or consumer group 'example-consumer-group'" {
-			log.Printf("Error getting pending messages: %v", err)
-		}
-		return
-	}
-
-	if len(pendingExtResult) == 0 {
-		fmt.Println("No pending messages to clear")
-		return
-	}
-
-	// Acknowledge all pending messages to clear them
-	messageIDs := make([]string, len(pendingExtResult))
-	for i, msg := range pendingExtResult {
-		messageIDs[i] = msg.ID
-	}
-
-	if len(messageIDs) > 0 {
-		err = client.XAck(ctx, streamName, groupName, messageIDs...).Err()
-		if err != nil {
-			log.Printf("Error acknowledging pending messages: %v", err)
-		} else {
-			fmt.Printf("Cleared %d pending messages\n", len(messageIDs))
-		}
-	}
-}
-
-func getEnv(key, defaultValue string) string {
-	if value := os.Getenv(key); value != "" {
-		return value
-	}
-	return defaultValue
+	return ch, nil
 }
