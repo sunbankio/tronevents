@@ -1,5 +1,5 @@
 # Multi-stage build to reduce image size
-FROM golang:1.21-alpine AS builder
+FROM golang:1.25-alpine AS builder
 
 # Install git for go modules
 RUN apk add --no-cache git
@@ -20,13 +20,12 @@ COPY . .
 RUN CGO_ENABLED=0 GOOS=linux go build -o tronevent-daemon ./cmd/daemon/main.go
 
 # Final stage
-FROM alpine:latest
+FROM alpine:3.22.1
 
-# Install ca-certificates for HTTPS requests
-RUN apk --no-cache add ca-certificates
-
-# Create non-root user
-RUN adduser -D -s /bin/sh tronevent
+# Install ca-certificates for HTTPS requests and create non-root user
+RUN apk --no-cache add ca-certificates \
+    && update-ca-certificates \
+    && adduser -D -s /bin/sh tronevent
 
 # Create app directory
 WORKDIR /app
