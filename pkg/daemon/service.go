@@ -25,7 +25,7 @@ type Service struct {
 	asynqClient           *asynq.Client
 	asynqServer           *asynq.Server
 	tronScanner           *tronScanner.Scanner
-	storage               *storage.RedisStorage
+	lastSyncedBlock       *storage.LastSyncedStorage
 	publisher             *publisher.EventPublisher
 	workerManager         *worker.Manager
 	monitoring            *monitoring.Metrics
@@ -67,7 +67,7 @@ func NewService(cfg *config.Config) *Service {
 		panic(err)
 	}
 
-	redisStorage := storage.NewRedisStorage(goRedisClient, "last_synced_block")
+	lastSyncedBlockStorage := storage.NewRedisStorage(goRedisClient, "tron:last_synced_block")
 	blockProcessedStorage := storage.NewBlockProcessedStorage(goRedisClient, "tron:processed_blocks")
 	publisher := publisher.NewEventPublisher(goRedisClient)
 	workerManager := worker.NewManager(asynqServer, log.Default())
@@ -79,7 +79,7 @@ func NewService(cfg *config.Config) *Service {
 		asynqClient:           asynqClient,
 		asynqServer:           asynqServer,
 		tronScanner:           tronScannerInstance,
-		storage:               redisStorage,
+		lastSyncedBlock:       lastSyncedBlockStorage,
 		publisher:             publisher,
 		workerManager:         workerManager,
 		monitoring:            monitoring,
@@ -148,7 +148,7 @@ func (s *Service) batchEnqueueBlocks(blockNumbers []int64, queueName string) {
 				continue
 			}
 			task := asynq.NewTask("block:process", payload)
-			if _, err := s.asynqClient.Enqueue(task, asynq.Queue(queueName)); err != nil {
+			if _, err := s.asynqClient.Enqueue(task, asynq.Queue(queueName), asynq.MaxRetry(5)); err != nil {
 				s.logger.Printf("Error enqueuing block %d: %v", blockNum, err)
 			} else {
 				s.logger.Printf("DEBUG: Successfully enqueued block %d to %s queue", blockNum, queueName)
@@ -170,7 +170,7 @@ func (s *Service) runLoop(ctx context.Context) {
 		}
 
 		// Read last_synced_block
-		lastSyncedBlock, err := s.storage.Load(ctx)
+		lastSyncedBlock, err := s.lastSyncedBlock.Load(ctx)
 		if err != nil {
 			s.logger.Println("Error loading last synced block: ", err)
 			time.Sleep(1 * time.Second)
@@ -208,14 +208,20 @@ func (s *Service) runLoop(ctx context.Context) {
 			s.logger.Printf("Error publishing batch of transactions: %v", err)
 		}
 
+		// Mark the current block as processed to prevent duplicate processing
+		if err := s.blockProcessedStorage.MarkProcessed(ctx, returnedBlockNum); err != nil {
+			s.logger.Printf("ERROR: Failed to mark block %d as processed: %v", returnedBlockNum, err)
+		}
+
 		// Program first run, or we are in sync, no backlog
 		// if last synced block not exists or zero or returned block number = last_synced_block+1
 		if lastSyncedBlock == 0 || returnedBlockNum == lastSyncedBlock+1 {
 			s.logger.Printf("DEBUG: First run or in sync - lastSyncedBlock: %d, returnedBlockNum: %d", lastSyncedBlock, returnedBlockNum)
 			// Update last synced_block
-			if err := s.storage.Save(ctx, returnedBlockNum); err != nil {
+			if err := s.lastSyncedBlock.Save(ctx, returnedBlockNum); err != nil {
 				s.logger.Printf("Error saving last synced block: %v", err)
 			}
+
 			s.logger.Printf("DEBUG: Updated last synced block to %d", returnedBlockNum)
 			// Wait 3 seconds and continue
 			time.Sleep(3 * time.Second)
@@ -236,9 +242,10 @@ func (s *Service) runLoop(ctx context.Context) {
 			s.batchEnqueueBlocks(blockNumbers, "priority")
 
 			// Update last synced_block
-			if err := s.storage.Save(ctx, returnedBlockNum); err != nil {
+			if err := s.lastSyncedBlock.Save(ctx, returnedBlockNum); err != nil {
 				s.logger.Printf("Error saving last synced block: %v", err)
 			}
+
 			s.logger.Printf("DEBUG: Updated last synced block to %d after slight backlog processing", returnedBlockNum)
 			// Wait 3 seconds and continue
 			time.Sleep(3 * time.Second)
@@ -268,9 +275,10 @@ func (s *Service) runLoop(ctx context.Context) {
 		s.batchEnqueueBlocks(blockNumbers, "backlog")
 
 		// Update last synced_block
-		if err := s.storage.Save(ctx, returnedBlockNum); err != nil {
+		if err := s.lastSyncedBlock.Save(ctx, returnedBlockNum); err != nil {
 			s.logger.Printf("Error saving last synced block: %v", err)
 		}
+
 		s.logger.Printf("DEBUG: Updated last synced block to %d after large backlog processing", returnedBlockNum)
 		// Continue (no wait in large backlog case)
 	}

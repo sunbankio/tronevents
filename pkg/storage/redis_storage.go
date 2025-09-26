@@ -8,27 +8,27 @@ import (
 	"github.com/go-redis/redis/v8"
 )
 
-// RedisStorage handles the persistence of the last processed block number using Redis.
-type RedisStorage struct {
+// LastSyncedStorage handles the persistence of the last processed block number using Redis.
+type LastSyncedStorage struct {
 	client *redis.Client
 	key    string
 }
 
 // NewRedisStorage creates a new RedisStorage.
-func NewRedisStorage(client *redis.Client, key string) *RedisStorage {
-	return &RedisStorage{
+func NewRedisStorage(client *redis.Client, key string) *LastSyncedStorage {
+	return &LastSyncedStorage{
 		client: client,
 		key:    key,
 	}
 }
 
 // Save saves the last processed block number to Redis.
-func (s *RedisStorage) Save(ctx context.Context, blockNumber int64) error {
+func (s *LastSyncedStorage) Save(ctx context.Context, blockNumber int64) error {
 	return s.client.Set(ctx, s.key, blockNumber, 0).Err()
 }
 
 // Load loads the last processed block number from Redis.
-func (s *RedisStorage) Load(ctx context.Context) (int64, error) {
+func (s *LastSyncedStorage) Load(ctx context.Context) (int64, error) {
 	val, err := s.client.Get(ctx, s.key).Result()
 	if err == redis.Nil {
 		// Key doesn't exist, return 0 as default
@@ -46,6 +46,6 @@ func (s *RedisStorage) Load(ctx context.Context) (int64, error) {
 }
 
 // Delete removes the block number key from Redis.
-func (s *RedisStorage) Delete(ctx context.Context) error {
+func (s *LastSyncedStorage) Delete(ctx context.Context) error {
 	return s.client.Del(ctx, s.key).Err()
 }

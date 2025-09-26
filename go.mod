@@ -5,6 +5,7 @@ go 1.25.0
 require (
 	github.com/go-redis/redis/v8 v8.11.5
 	github.com/hibiken/asynq v0.25.1
+	github.com/hibiken/asynqmon v0.7.2
 	github.com/kslamph/tronlib v0.0.0-20250925075514-d2b7009a95d9
 	gopkg.in/yaml.v2 v2.4.0
 )
@@ -17,6 +18,7 @@ require (
 	github.com/dgryski/go-rendezvous v0.0.0-20200823014737-9f7001d12a5f // indirect
 	github.com/ethereum/go-ethereum v1.16.3 // indirect
 	github.com/google/uuid v1.6.0 // indirect
+	github.com/gorilla/mux v1.8.0 // indirect
 	github.com/holiman/uint256 v1.3.2 // indirect
 	github.com/kslamph/bip39-hdwallet v1.0.1 // indirect
 	github.com/mr-tron/base58 v1.2.0 // indirect

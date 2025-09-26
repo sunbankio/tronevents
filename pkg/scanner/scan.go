@@ -3,6 +3,7 @@ package scanner
 import (
 	"context"
 	"encoding/hex"
+	"fmt"
 	"time"
 
 	"github.com/kslamph/tronlib/pb/api"
@@ -50,6 +51,10 @@ func (s *Scanner) Scan(ctx context.Context, blockNumber int64) (int64, time.Time
 		if err != nil {
 			return 0, time.Time{}, nil, err
 		}
+		// Check if block is nil (block doesn't exist)
+		if block == nil {
+			return 0, time.Time{}, nil, fmt.Errorf("block %d is nil", blockNumber)
+		}
 	} else {
 		var err error
 		// Get the latest block
@@ -57,8 +62,18 @@ func (s *Scanner) Scan(ctx context.Context, blockNumber int64) (int64, time.Time
 		if err != nil {
 			return 0, time.Time{}, nil, err
 		}
+		// Check if block is nil (shouldn't happen for latest block, but be safe)
+		if block == nil {
+			return 0, time.Time{}, nil, fmt.Errorf("current block is nil")
+		}
 		blockNumber = block.BlockHeader.RawData.Number
 	}
+
+	// Additional safety check for block header
+	if block.BlockHeader == nil || block.BlockHeader.RawData == nil {
+		return 0, time.Time{}, nil, fmt.Errorf("block %d does not exist", blockNumber)
+	}
+
 	blockTime := time.Unix(0, block.BlockHeader.RawData.Timestamp*int64(time.Millisecond))
 
 	// Get transaction info - assuming it always exists for block transactions
