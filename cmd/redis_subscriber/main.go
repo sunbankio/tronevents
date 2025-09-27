@@ -4,8 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"os"
-	"strings"
 	"time"
 
 	"github.com/go-redis/redis/v8"
@@ -17,9 +15,8 @@ func main() {
 	processor := &EventProcessor{
 		redisStream:  redisStream,
 		streamName:   "tron:events",
-		groupName:    "exampleGroupNew",
-		consumerName: "exampleConsumer1",
-		stateStore:   &FileStateStore{filename: "last_processed_id.txt"},
+		groupName:    "tronevents_group",    // Hardcoded consumer group
+		consumerName: "tronevents_consumer", // Hardcoded consumer name
 	}
 
 	// Start processing
@@ -36,50 +33,12 @@ type EventProcessor struct {
 	streamName   string
 	groupName    string
 	consumerName string
-	stateStore   *FileStateStore // File-based state store
-}
-
-// File-based state store that matches the README description
-type FileStateStore struct {
-	filename string
-}
-
-func (s *FileStateStore) SaveLastProcessedID(consumerGroup, consumerName, lastID string) error {
-	content := fmt.Sprintf("%s:%s:%s", consumerGroup, consumerName, lastID)
-	return os.WriteFile(s.filename, []byte(content), 0644)
-}
-
-func (s *FileStateStore) GetLastProcessedID(consumerGroup, consumerName string) (string, error) {
-	content, err := os.ReadFile(s.filename)
-	if err != nil {
-		return "", err
-	}
-	
-	parts := strings.Split(string(content), ":")
-	if len(parts) != 3 {
-		return "", fmt.Errorf("invalid checkpoint format")
-	}
-	
-	storedGroup := parts[0]
-	storedConsumer := parts[1]
-	lastID := parts[2]
-	
-	if storedGroup != consumerGroup || storedConsumer != consumerName {
-		return "", fmt.Errorf("checkpoint does not match current consumer group")
-	}
-	
-	return lastID, nil
 }
 
 func (ep *EventProcessor) ProcessEvents(ctx context.Context) error {
-	// Get last processed ID
-	lastID, err := ep.stateStore.GetLastProcessedID(ep.groupName, ep.consumerName)
-	if err != nil {
-		lastID = "0-0" // Start from beginning if no state found
-	}
-
-	// Subscribe to stream
-	streamCh, err := ep.redisStream.SubscribeWithResume(ep.streamName, ep.groupName, ep.consumerName, lastID)
+	// Subscribe to stream starting from the last acknowledged message (>)
+	// This will automatically read only new messages that haven't been delivered to any consumer in the group
+	streamCh, err := ep.redisStream.SubscribeWithResume(ep.streamName, ep.groupName, ep.consumerName, ">")
 	if err != nil {
 		return err
 	}
@@ -100,11 +59,8 @@ func (ep *EventProcessor) ProcessEvents(ctx context.Context) error {
 					continue
 				}
 
-				// Acknowledge the message
+				// Acknowledge the message - Redis will track this automatically
 				ep.redisStream.client.XAck(ep.redisStream.ctx, ep.streamName, ep.groupName, msg.ID)
-
-				// Save the last processed ID
-				ep.stateStore.SaveLastProcessedID(ep.groupName, ep.consumerName, msg.ID)
 			}
 		}
 	}
@@ -139,9 +95,8 @@ func (rs *RedisStream) CreateConsumerGroup(streamName, groupName string) error {
 	return rs.client.XGroupCreateMkStream(rs.ctx, streamName, groupName, "$").Err()
 }
 
-// Subscribe with resume capability
-func (rs *RedisStream) SubscribeWithResume(streamName, groupName, consumerName string,
-	lastProcessedID string) (<-chan *redis.XStream, error) {
+// Subscribe with resume capability - now uses server-side tracking only
+func (rs *RedisStream) SubscribeWithResume(streamName, groupName, consumerName, startID string) (<-chan *redis.XStream, error) {
 
 	// Create consumer group if it doesn't exist
 	err := rs.CreateConsumerGroup(streamName, groupName)
@@ -154,35 +109,13 @@ func (rs *RedisStream) SubscribeWithResume(streamName, groupName, consumerName s
 	go func() {
 		defer close(ch)
 
-		// Start position
-		startID := lastProcessedID
-		if startID == "" {
-			startID = "0-0" // Start from beginning
-		}
-
 		for {
-			// Read pending messages first (for resume capability)
-			if startID != ">" {
-				pendingMsgs, err := rs.client.XReadGroup(rs.ctx, &redis.XReadGroupArgs{
-					Group:    groupName,
-					Consumer: consumerName,
-					Streams:  []string{streamName, startID},
-					Count:    100,
-					Block:    0, // No blocking for pending messages
-				}).Result()
-
-				if err == nil && len(pendingMsgs) > 0 {
-					ch <- &pendingMsgs[0]
-					startID = ">" // Switch to new messages after processing pending
-					continue
-				}
-			}
-
-			// Read new messages
+			// Read new messages using server-side tracking
+			// If startID is ">", we only get new messages never delivered to any consumer in the group
 			streams, err := rs.client.XReadGroup(rs.ctx, &redis.XReadGroupArgs{
 				Group:    groupName,
 				Consumer: consumerName,
-				Streams:  []string{streamName, ">"},
+				Streams:  []string{streamName, startID}, // Using the startID parameter (typically ">")
 				Count:    100,
 				Block:    5 * time.Second, // Block for 5 seconds
 			}).Result()

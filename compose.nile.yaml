@@ -1,0 +1,85 @@
+services:
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    volumes:
+      - redis_data:/data
+    command: >
+      redis-server --appendonly yes
+                 --maxmemory ${REDIS_MAXMEMORY:-512mb}
+                 --maxmemory-policy allkeys-lru
+                 --stream-node-max-bytes 4096
+                 --stream-node-max-entries 100
+                 --save 900 1 300 10 60 10000
+                 --repl-backlog-size 2mb
+                 --hz 10
+                 --latency-monitor-threshold 0
+    environment:
+      - REDIS_REPLICATION_MODE=master
+    ports:
+      - "6379:6379"
+    networks:
+      - tronevents
+    deploy:
+      resources:
+        limits:
+          memory: ${REDIS_MEMORY_LIMIT:-512M}
+        reservations:
+          memory: ${REDIS_MEMORY_RESERVATION:-256M}
+
+  tronevent-daemon:
+    image: ghcr.io/sunbankio/tronevents:latest
+    restart: unless-stopped
+    depends_on:
+      - redis
+      - envoy
+    volumes:
+      - ./config.yaml:/app/config/config.yaml:ro
+    environment:
+      - CONFIG_PATH=/app/config/config.yaml
+    networks:
+      - tronevents
+    deploy:
+      resources:
+        limits:
+          memory: ${TRONEVENT_MEMORY_LIMIT:-512M}
+        reservations:
+          memory: ${TRONEVENT_MEMORY_RESERVATION:-256M}
+    working_dir: /app/config
+    command: >
+      sh -c "
+        # Start the daemon from config directory
+        tronevent-daemon
+      "
+
+
+volumes:
+  redis_data:
+    driver: local
+
+networks:
+  tronevents:
+    driver: bridge
+
+# Memory configuration presets for different host RAM sizes:
+#
+# For 1GB RAM hosts:
+# REDIS_MAXMEMORY=512mb
+# REDIS_MEMORY_LIMIT=640M
+# TRONEVENT_MEMORY_LIMIT=256M
+#
+# For 2GB RAM hosts:
+# REDIS_MAXMEMORY=1gb
+# REDIS_MEMORY_LIMIT=1.2G
+# TRONEVENT_MEMORY_LIMIT=512M
+#
+# For 4GB RAM hosts:
+# REDIS_MAXMEMORY=2gb
+# REDIS_MEMORY_LIMIT=2.5G
+# TRONEVENT_MEMORY_LIMIT=1G
+#
+# For 8GB RAM hosts:
+# REDIS_MAXMEMORY=4gb
+# REDIS_MEMORY_LIMIT=5G
+# TRONEVENT_MEMORY_LIMIT=2G
